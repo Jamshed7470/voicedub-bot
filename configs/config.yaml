@@ -1,0 +1,114 @@
+# ============ VoiceDub Bot — конфигурация пайплайна ============
+
+profiles:
+  full:
+    whisper_model: large-v3
+    nllb_model: facebook/nllb-200-distilled-1.3B
+    demucs_model: htdemucs
+  light:
+    whisper_model: medium
+    nllb_model: facebook/nllb-200-distilled-600M
+    demucs_model: htdemucs
+
+asr:
+  batch_size: 8
+  compute_type_gpu: int8_float16
+  compute_type_cpu: int8
+
+limits:
+  max_duration_minutes: 60      # лимит длительности для ссылок и файлов
+  telegram_download_mb: 20      # лимит Bot API на скачивание без локального сервера
+  telegram_upload_mb: 50        # лимит Bot API на отправку файла ботом
+
+audio:
+  analysis_sr: 16000            # analysis.wav — для всех моделей анализа
+  source_sr: 44100              # source.wav — для separations и копирования фрагментов
+  tts_sr: 24000                 # выход XTTS-v2
+
+segments:
+  min_duration_s: 1.0           # сегменты короче — склеивать с соседним того же спикера
+  merge_gap_s: 0.3              # ...если пауза меньше этого значения
+
+timing:
+  atempo_max: 1.35              # максимальное ускорение синтеза
+  start_tolerance_ms: 50        # допуск на начало сегмента
+  speed_soft_max: 1.3           # мягкая подгонка параметром speed в XTTS
+
+speaker_ref:
+  min_ref_s: 3.0                # референс короче — использовать пресет-голос по полу
+  target_ref_min_s: 15
+  target_ref_max_s: 30
+
+gender:
+  model: alefiury/wav2vec2-large-xlsr-53-gender-recognition-librispeech
+  min_segment_s: 1.5
+  f0_male_max_hz: 155
+  f0_female_min_hz: 175
+  clf_confidence_threshold: 0.8
+
+emotions:
+  model: speechbrain/emotion-recognition-wav2vec2-IEMOCAP
+
+events:
+  model: MIT/ast-finetuned-audioset-10-10-0.4593
+  window_s: 2.0
+  hop_s: 1.0
+  threshold: 0.5
+  crossfade_ms: 50
+  min_event_s: 0.3
+  # какие классы AudioSet копировать из оригинала
+  classes:
+    - Laughter
+    - Giggle
+    - Chuckle, chortle
+    - Belly laugh
+    - Crying, sobbing
+    - Baby cry, infant cry
+    - Sigh
+    - Applause
+    - Whistling
+    - Screaming
+  # сегмент речи, перекрытый событием более чем на эту долю, не синтезируется
+  overlap_skip_ratio: 0.6
+
+translation:
+  claude_model: claude-sonnet-4-6
+  temperature: 0.2
+  window_segments: 80
+  overlap_segments: 5
+  max_chars_ratio: 1.3          # перевод длиннее бюджета × ratio → запросить сжатый вариант
+
+# темп речи (символов в секунду) для расчёта бюджета длины перевода
+speech_rate_chars_per_s:
+  ru: 14
+  en: 15
+  tr: 13
+  ar: 12
+  zh-cn: 5
+  ja: 7
+  ko: 8
+  hi: 13
+  es: 15
+  fr: 15
+  de: 13
+  it: 15
+  pt: 15
+  pl: 13
+  nl: 14
+  cs: 13
+  hu: 13
+
+mix:
+  keep_background_default: true
+  keep_original_track_default: false
+  peak_dbfs: -1.0
+
+output:
+  video_codec_copy: true
+  audio_bitrate: 192k
+  compress_crf_start: 26
+  compress_crf_max: 34
+  compress_max_height: 720
+
+jobs:
+  keep_days: 7                  # хранить логи и speakers.json N дней

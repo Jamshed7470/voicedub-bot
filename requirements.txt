@@ -1,0 +1,35 @@
+# ============ VoiceDub Bot — зависимости ============
+# Python 3.10 или 3.11 (НЕ 3.12+!). Установка: pip install -r requirements.txt
+# PyTorch с CUDA ставится ОТДЕЛЬНОЙ командой ДО этого файла — см. README.md.
+
+# --- Бот и утилиты ---
+aiogram>=3.10,<4
+python-dotenv>=1.0
+PyYAML>=6.0
+yt-dlp>=2025.1.15
+num2words>=0.5.13
+
+# --- Аудио-обработка ---
+numpy>=1.24,<2.1
+soundfile>=0.12
+librosa>=0.10
+noisereduce>=3.0
+
+# --- ML-модели (тяжёлые; требуют torch) ---
+torch>=2.1
+torchaudio>=2.1
+whisperx>=3.1.5
+pyannote.audio>=3.1,<4
+demucs>=4.0.1
+coqui-tts>=0.24,<0.27
+transformers>=4.40,<4.50
+speechbrain>=1.0
+sentencepiece>=0.1.99
+sacremoses>=0.1.1
+accelerate>=0.30
+
+# --- Перевод через Claude API (необязательно, работает и без него) ---
+anthropic>=0.40
+
+# --- Тесты ---
+pytest>=8.0
