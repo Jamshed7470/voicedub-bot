@@ -73,6 +73,9 @@ events:
 
 translation:
   claude_model: claude-sonnet-4-6
+  xai_model: grok-4                # модель для «уличного» режима
+  street_len_min: 0.9              # длина уличного перевода: 90–110% оригинала
+  street_len_max: 1.1
   temperature: 0.2
   window_segments: 80
   overlap_segments: 5

@@ -20,9 +20,14 @@ def _get_conn() -> sqlite3.Connection:
                    user_id INTEGER PRIMARY KEY,
                    lang TEXT,
                    keep_background INTEGER,
-                   keep_original INTEGER
+                   keep_original INTEGER,
+                   style TEXT
                )"""
         )
+        try:  # миграция старой базы без колонки style
+            _conn.execute("ALTER TABLE users ADD COLUMN style TEXT")
+        except sqlite3.OperationalError:
+            pass
         _conn.commit()
     return _conn
 
@@ -33,19 +38,22 @@ def get_user(user_id: int) -> dict:
         "lang": None,
         "keep_background": bool(cfg.y("mix", "keep_background_default", default=True)),
         "keep_original": bool(cfg.y("mix", "keep_original_track_default", default=False)),
+        "style": "normal",
     }
     with _lock:
         row = _get_conn().execute(
-            "SELECT lang, keep_background, keep_original FROM users WHERE user_id=?",
+            "SELECT lang, keep_background, keep_original, style FROM users "
+            "WHERE user_id=?",
             (user_id,),
         ).fetchone()
     if not row:
         return defaults
-    lang, bg, orig = row
+    lang, bg, orig, style = row
     return {
         "lang": lang,
         "keep_background": defaults["keep_background"] if bg is None else bool(bg),
         "keep_original": defaults["keep_original"] if orig is None else bool(orig),
+        "style": style or "normal",
     }
 
 
@@ -55,14 +63,16 @@ def _upsert(user_id: int, **fields) -> None:
     with _lock:
         conn = _get_conn()
         conn.execute(
-            """INSERT INTO users (user_id, lang, keep_background, keep_original)
-               VALUES (?, ?, ?, ?)
+            """INSERT INTO users (user_id, lang, keep_background, keep_original, style)
+               VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
                    lang=excluded.lang,
                    keep_background=excluded.keep_background,
-                   keep_original=excluded.keep_original""",
+                   keep_original=excluded.keep_original,
+                   style=excluded.style""",
             (user_id, current["lang"],
-             int(current["keep_background"]), int(current["keep_original"])),
+             int(current["keep_background"]), int(current["keep_original"]),
+             current["style"]),
         )
         conn.commit()
 
@@ -80,4 +90,10 @@ def toggle_background(user_id: int) -> bool:
 def toggle_original(user_id: int) -> bool:
     new = not get_user(user_id)["keep_original"]
     _upsert(user_id, keep_original=new)
+    return new
+
+
+def toggle_style(user_id: int) -> str:
+    new = "street" if get_user(user_id)["style"] == "normal" else "normal"
+    _upsert(user_id, style=new)
     return new

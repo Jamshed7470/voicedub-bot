@@ -46,6 +46,7 @@ class Config:
     bot_token: str = ""
     hf_token: str = ""
     anthropic_api_key: str = ""
+    xai_api_key: str = ""
     telegram_local_api_url: str = ""
     device: str = "cpu"
     profile: str = "full"
@@ -127,6 +128,7 @@ def load_config() -> Config:
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
         hf_token=os.getenv("HF_TOKEN", "").strip(),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
+        xai_api_key=os.getenv("XAI_API_KEY", "").strip(),
         telegram_local_api_url=os.getenv("TELEGRAM_LOCAL_API_URL", "").strip(),
         device=_resolve_device(os.getenv("DEVICE", "auto")),
         profile=profile,

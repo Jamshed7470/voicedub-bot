@@ -164,14 +164,14 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
     # ---------- 7. Перевод ----------
     await report(7)
-    if not same_lang:
-        from core.translate import get_translator
-        translator = get_translator(cfg)
+    style = job.settings.get("translation_style", "normal")
+    from core.translate import get_translator
+    translator = get_translator(cfg, style)
+    if not same_lang or style == "street":
+        # уличный стиль применяется даже без смены языка (переозвучка со стёбом)
         await asyncio.to_thread(translator.translate_segments, segments,
                                 src_lang, tgt_lang, profiles, report_ts(7))
     else:
-        from core.translate import get_translator
-        translator = get_translator(cfg)  # понадобится для сжатия сегментов
         log.info("Языки совпадают — переозвучка без перевода")
     _save_json(job_dir / "translated.json",
                {"language": tgt_lang, "segments": segments})

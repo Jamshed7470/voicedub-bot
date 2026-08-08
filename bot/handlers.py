@@ -41,7 +41,8 @@ async def cmd_settings(message: Message) -> None:
     user = db.get_user(message.from_user.id)
     await message.answer(
         texts.SETTINGS_TITLE,
-        reply_markup=settings_keyboard(user["keep_background"], user["keep_original"]),
+        reply_markup=settings_keyboard(user["keep_background"], user["keep_original"],
+                                       user["style"]),
     )
 
 
@@ -72,22 +73,30 @@ async def cb_lang(query: CallbackQuery) -> None:
     await query.message.edit_text(texts.LANG_SAVED.format(lang=TTS_LANGUAGES[code]))
 
 
-@router.callback_query(F.data == "set:bg")
-async def cb_toggle_bg(query: CallbackQuery) -> None:
-    db.toggle_background(query.from_user.id)
+async def _refresh_settings(query: CallbackQuery) -> None:
     user = db.get_user(query.from_user.id)
     await query.answer()
     await query.message.edit_reply_markup(
-        reply_markup=settings_keyboard(user["keep_background"], user["keep_original"]))
+        reply_markup=settings_keyboard(user["keep_background"], user["keep_original"],
+                                       user["style"]))
+
+
+@router.callback_query(F.data == "set:bg")
+async def cb_toggle_bg(query: CallbackQuery) -> None:
+    db.toggle_background(query.from_user.id)
+    await _refresh_settings(query)
 
 
 @router.callback_query(F.data == "set:orig")
 async def cb_toggle_orig(query: CallbackQuery) -> None:
     db.toggle_original(query.from_user.id)
-    user = db.get_user(query.from_user.id)
-    await query.answer()
-    await query.message.edit_reply_markup(
-        reply_markup=settings_keyboard(user["keep_background"], user["keep_original"]))
+    await _refresh_settings(query)
+
+
+@router.callback_query(F.data == "set:style")
+async def cb_toggle_style(query: CallbackQuery) -> None:
+    db.toggle_style(query.from_user.id)
+    await _refresh_settings(query)
 
 
 @router.callback_query(F.data.startswith("samelang:"))
@@ -130,6 +139,7 @@ async def _enqueue(message: Message, jobqueue: JobQueue,
         settings={
             "keep_background": user["keep_background"],
             "keep_original_track": user["keep_original"],
+            "translation_style": user["style"],
         },
     )
     reporter = ProgressReporter(message.bot, message.chat.id)

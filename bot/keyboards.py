@@ -17,13 +17,17 @@ def lang_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_keyboard(keep_background: bool, keep_original: bool) -> InlineKeyboardMarkup:
+def settings_keyboard(keep_background: bool, keep_original: bool,
+                      style: str = "normal") -> InlineKeyboardMarkup:
     from bot import texts
     bg = texts.SETTINGS_BG_ON if keep_background else texts.SETTINGS_BG_OFF
     orig = texts.SETTINGS_ORIG_ON if keep_original else texts.SETTINGS_ORIG_OFF
+    st = (texts.SETTINGS_STYLE_STREET if style == "street"
+          else texts.SETTINGS_STYLE_NORMAL)
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=bg, callback_data="set:bg")],
         [InlineKeyboardButton(text=orig, callback_data="set:orig")],
+        [InlineKeyboardButton(text=st, callback_data="set:style")],
     ])
 
 
