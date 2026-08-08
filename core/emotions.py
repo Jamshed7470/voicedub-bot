@@ -47,7 +47,13 @@ def classify_segments(vocals16_path: str | Path, segments: list[dict],
         try:
             cut_fragment(vocals16_path, piece, seg["start"], seg["end"],
                          sr=16000, mono=True)
-            _, score, _, text_lab = clf.classify_file(str(piece))
+            # ВАЖНО: classify_file ломает Windows-пути (fetch() съедает "\"
+            # после буквы диска) — грузим аудио сами и зовём classify_batch
+            import soundfile as sf
+            import torch
+            y, _sr = sf.read(str(piece), dtype="float32")
+            wav = torch.from_numpy(y).unsqueeze(0)
+            _, score, _, text_lab = clf.classify_batch(wav)
             label = text_lab[0] if isinstance(text_lab, (list, tuple)) else str(text_lab)
             seg["emotion"] = LABEL_MAP.get(label, "neutral")
             seg["emotion_conf"] = round(float(score), 3)
