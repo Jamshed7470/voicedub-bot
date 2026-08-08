@@ -109,6 +109,10 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # 4) все остальные зависимости
 pip install -r requirements.txt
+
+# 5) ВАЖНО для GPU на Windows: обновить ctranslate2 (иначе распознавание
+#    речи молча упадёт — ему нужен cuDNN 9 из состава torch)
+pip install "ctranslate2>=4.5,<5"
 ```
 
 **Linux:**

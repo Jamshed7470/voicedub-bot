@@ -14,9 +14,8 @@ _classifier = None
 def _get_classifier(cfg):
     global _classifier
     if _classifier is None:
-        # TTS.api обязан загрузиться раньше speechbrain: обратный порядок
-        # ломает lazy-import speechbrain.integrations.k2_fsa (k2 не установлен)
-        import TTS.api  # noqa: F401
+        from core.sb_compat import patch_speechbrain_lazy_imports
+        patch_speechbrain_lazy_imports()
         from speechbrain.inference.interfaces import foreign_class
         model = cfg.y("emotions", "model",
                       default="speechbrain/emotion-recognition-wav2vec2-IEMOCAP")

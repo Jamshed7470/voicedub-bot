@@ -23,6 +23,9 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg) -> list[dict]:
             "раздел «Шаг 4. Токен HuggingFace»."
         )
 
+    from core.sb_compat import patch_speechbrain_lazy_imports
+    patch_speechbrain_lazy_imports()
+
     import whisperx
 
     try:

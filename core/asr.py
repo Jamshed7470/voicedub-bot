@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import gc
 import logging
+import os
+import sys
+from pathlib import Path
 
 from core.errors import UserError
 
@@ -15,6 +18,18 @@ def transcribe(analysis_wav: str, cfg, progress=None) -> dict:
     Возвращает dict: {"language": str, "segments": [{start, end, text, words: [...]}]}.
     """
     import torch
+
+    from core.sb_compat import patch_speechbrain_lazy_imports
+    patch_speechbrain_lazy_imports()
+
+    # Windows: ctranslate2 ищет cuDNN-DLL в PATH — подключаем папку torch\lib,
+    # где лежат cudnn*_9.dll (иначе процесс молча падает на загрузке модели)
+    if sys.platform == "win32":
+        torch_lib = Path(torch.__file__).parent / "lib"
+        if torch_lib.is_dir():
+            os.add_dll_directory(str(torch_lib))
+            os.environ["PATH"] = str(torch_lib) + os.pathsep + os.environ.get("PATH", "")
+
     import whisperx
 
     device = cfg.device
