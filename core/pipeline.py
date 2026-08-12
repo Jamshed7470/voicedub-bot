@@ -10,7 +10,7 @@ import json
 import logging
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from core import media
@@ -35,17 +35,23 @@ STAGES = [
 
 GENDER_RU = {"male": "мужчина", "female": "женщина"}
 
+# метка «медиа этой задачи в кэш не класть» (длинный ролик — гигабайты wav)
+NO_MEDIA_CACHE = "no_media_cache"
+
 
 @dataclass
 class JobResult:
     kind: str                       # "video" | "audio"
-    output_path: Path
+    output_path: Path | None        # что отправлять в чат (None — не влезает в лимит)
     srt_path: Path
     src_lang: str
     tgt_lang: str
     speakers: dict
     elapsed_s: float
     summary: str = ""
+    parts: list[Path] = field(default_factory=list)  # если не влез одним файлом
+    saved_path: Path | None = None  # копия в папке готовых видео (всегда)
+    saved_srt: Path | None = None
 
 
 @dataclass
@@ -84,90 +90,175 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
     tgt_lang = job.target_lang
 
-    # ---------- 1. Скачивание ----------
-    await report(1)
-    if job.kind == "url":
-        from core.downloader import download_url
-        input_path = await asyncio.to_thread(download_url, job.payload, job_dir, cfg)
+    # ---------- Кэш: медиа и разбор голосов могли уже считаться ----------
+    from core import cache as source_cache
+    spk_hint = str(job.settings.get("speakers", "auto"))
+    src_key = source_cache.source_key(job.kind, job.payload)
+    (job_dir / "cache_key.txt").write_text(f"{src_key}\n{spk_hint}",
+                                           encoding="utf-8")
+    cached_media = source_cache.media_dir(src_key)
+    cached_analysis = source_cache.analysis_dir(src_key, spk_hint)
+
+    if cached_media:
+        # ---------- 1–3 из кэша ----------
+        await hooks.report(3, "беру видео и дорожки из кэша", 100)
+        source_cache.touch(cached_media)
+        input_path = source_cache.input_file(cached_media)
+        info = media.probe(input_path)
+        analysis_wav = cached_media / "analysis.wav"
+        source_wav = cached_media / "source.wav"
+        vocals_wav = cached_media / "vocals.wav"
+        vocals16_wav = cached_media / "vocals16.wav"
+        background_wav = cached_media / "background.wav"
     else:
-        from core.downloader import download_from_telegram
-        input_path = job_dir / "input.bin"
-        await download_from_telegram(bot, job.payload["file_id"],
-                                     job.payload.get("file_size"), input_path, cfg)
+        # ---------- 1. Скачивание ----------
+        await report(1)
+        if job.kind == "url":
+            from core.downloader import download_url
+            input_path = await asyncio.to_thread(download_url, job.payload,
+                                                 job_dir, cfg)
+        elif job.kind == "local":
+            # файл уже на диске: копировать гигабайты незачем, читаем на месте
+            input_path = Path(job.payload)
+            if not input_path.exists():
+                raise UserError(f"Файл не найден: {input_path}")
+        else:
+            from core.downloader import download_from_telegram
+            input_path = job_dir / "input.bin"
+            await download_from_telegram(bot, job.payload["file_id"],
+                                         job.payload.get("file_size"),
+                                         input_path, cfg)
 
-    # ---------- 2. Извлечение аудио ----------
-    await report(2)
-    info = media.probe(input_path)
-    if not info.has_audio:
-        raise UserError("В этом видео нет аудиодорожки — дублировать нечего.")
-    if info.duration > cfg.max_duration_s:
-        raise UserError(
-            f"Файл слишком длинный: {info.duration / 60:.0f} мин. "
-            f"Лимит — {cfg.max_duration_s / 60:.0f} мин."
+        # ---------- 2. Извлечение аудио ----------
+        await report(2)
+        info = media.probe(input_path)
+        if not info.has_audio:
+            raise UserError("В этом видео нет аудиодорожки — дублировать нечего.")
+        if info.duration > cfg.max_duration_s:
+            raise UserError(
+                f"Файл слишком длинный: {info.duration / 60:.0f} мин. "
+                f"Лимит — {cfg.max_duration_s / 60:.0f} мин."
+            )
+        _check_disk(job_dir, info.duration, input_path, cfg)
+        cache_media = _should_cache_media(info.duration, input_path, cfg, job_dir)
+        if not cache_media:
+            # метка для cleanup_job: медиа этого ролика в кэш не переносим
+            (job_dir / NO_MEDIA_CACHE).write_text("1", encoding="utf-8")
+        if info.duration > 3600:
+            log.info("Длинный ролик: %.0f мин — обработка займёт заметное время",
+                     info.duration / 60)
+        analysis_wav, source_wav = await asyncio.to_thread(
+            media.extract_audio, input_path, job_dir,
+            int(cfg.y("audio", "analysis_sr", default=16000)),
+            int(cfg.y("audio", "source_sr", default=44100)),
         )
-    analysis_wav, source_wav = await asyncio.to_thread(
-        media.extract_audio, input_path, job_dir,
-        int(cfg.y("audio", "analysis_sr", default=16000)),
-        int(cfg.y("audio", "source_sr", default=44100)),
-    )
 
-    # ---------- 3. Разделение голоса и фона ----------
-    await report(3)
-    from core.separate import separate
-    vocals_wav, background_wav = await asyncio.to_thread(
-        separate, source_wav, job_dir, cfg)
-    vocals16_wav = job_dir / "vocals16.wav"
+        # ---------- 3. Разделение голоса и фона ----------
+        await report(3)
+        from core.separate import separate
+        vocals_wav, background_wav = await asyncio.to_thread(
+            separate, source_wav, job_dir, cfg, report_ts(3))
+        vocals16_wav = job_dir / "vocals16.wav"
 
-    # ---------- 4. Распознавание речи ----------
-    await report(4)
-    from core.asr import transcribe
-    asr_result = await asyncio.to_thread(transcribe, str(analysis_wav), cfg,
-                                         report_ts(4))
-    src_lang = asr_result.get("language") or "en"
+        # в кэш сразу: дальше задача может упасть или бота перезапустят,
+        # а скачивание и Demucs — самые дорогие этапы.
+        # длинные ролики не кэшируем: их дорожки — это гигабайты wav
+        stored = (await asyncio.to_thread(source_cache.store_media, job_dir, src_key)
+                  if cache_media else None)
+        if stored:
+            input_path = source_cache.input_file(stored) or input_path
+            analysis_wav = stored / "analysis.wav"
+            source_wav = stored / "source.wav"
+            vocals_wav = stored / "vocals.wav"
+            vocals16_wav = stored / "vocals16.wav"
+            background_wav = stored / "background.wav"
 
-    same_lang = _norm_lang(src_lang) == _norm_lang(tgt_lang)
-    if same_lang and hooks.confirm_same_lang is not None:
-        # исходный язык совпадает с целевым → предупредить и спросить
-        proceed = await hooks.confirm_same_lang(src_lang)
-        if not proceed:
-            raise JobCancelled()
+    if cached_analysis:
+        # ---------- 4–6 из кэша (то же число спикеров) ----------
+        await hooks.report(6, "беру разбор голосов из кэша", 100)
+        source_cache.touch(cached_analysis)
+        tr = source_cache.load_transcript(cached_analysis)
+        src_lang = tr["language"]
+        segments = tr["segments"]
+        events = tr["events"]
+        profiles = source_cache.load_profiles(cached_analysis)
+        _save_json(job_dir / "transcript.json", tr)
 
-    # ---------- 5. Диаризация спикеров ----------
-    await report(5)
-    from core.diarize import diarize_and_assign
-    segments = await asyncio.to_thread(diarize_and_assign, str(analysis_wav),
-                                       asr_result, cfg)
-    if not segments:
-        raise UserError("В этом файле не нашлось речи — нечего дублировать.")
+        same_lang = _norm_lang(src_lang) == _norm_lang(tgt_lang)
+        if same_lang and hooks.confirm_same_lang is not None:
+            proceed = await hooks.confirm_same_lang(src_lang)
+            if not proceed:
+                raise JobCancelled()
+    else:
+        # ---------- 4. Распознавание речи ----------
+        await report(4)
+        from core.asr import transcribe
+        # по очищенному голосу: под музыку и шум Whisper глохнет, а вокал
+        # после Demucs у нас уже посчитан этапом раньше
+        asr_input = vocals16_wav if Path(vocals16_wav).exists() else analysis_wav
+        asr_result = await asyncio.to_thread(transcribe, str(asr_input), cfg,
+                                             report_ts(4))
+        src_lang = asr_result.get("language") or "en"
 
-    # ---------- 6. Эмоции, события, профили спикеров ----------
-    await report(6)
-    import numpy as np  # noqa: F401
+        same_lang = _norm_lang(src_lang) == _norm_lang(tgt_lang)
+        if same_lang and hooks.confirm_same_lang is not None:
+            # исходный язык совпадает с целевым → предупредить и спросить
+            proceed = await hooks.confirm_same_lang(src_lang)
+            if not proceed:
+                raise JobCancelled()
 
-    from core.emotions import classify_segments
-    from core.events import detect_events, mark_event_segments
-    from core.speakers import build_profiles
+        # ---------- 5. Диаризация спикеров ----------
+        await report(5)
+        from core.diarize import diarize_and_assign
+        # по очищенному голосу: музыка и шум смазывают голосовые отпечатки,
+        # и похожие спикеры слипаются в один кластер
+        segments = await asyncio.to_thread(diarize_and_assign, str(vocals16_wav),
+                                           asr_result, cfg, spk_hint)
+        if not segments:
+            raise UserError("В этом файле не нашлось речи — нечего дублировать.")
 
-    def _stage6() -> tuple[list[dict], dict]:
-        import librosa
-        y16, _ = librosa.load(str(vocals16_wav), sr=16000, mono=True)
-        events = detect_events(y16, 16000, cfg, report_ts(6))
-        mark_event_segments(segments, events, cfg)
-        classify_segments(vocals16_wav, segments, cfg, tmp_dir)
-        profiles = build_profiles(job_dir, vocals_wav, segments, cfg)
-        return events, profiles
+        # ---------- 6. Эмоции, события, профили спикеров ----------
+        await report(6)
+        import numpy as np  # noqa: F401
 
-    events, profiles = await asyncio.to_thread(_stage6)
+        from core.emotions import classify_segments
+        from core.events import detect_events, mark_event_segments
+        from core.speakers import build_profiles
 
-    _save_json(job_dir / "transcript.json",
-               {"language": src_lang, "segments": segments, "events": events})
+        def _stage6() -> tuple[list[dict], dict]:
+            import librosa
+            y16, _ = librosa.load(str(vocals16_wav), sr=16000, mono=True)
+            events = detect_events(y16, 16000, cfg, report_ts(6))
+            mark_event_segments(segments, events, cfg)
+            classify_segments(vocals16_wav, segments, cfg, tmp_dir)
+            profiles = build_profiles(job_dir, vocals_wav, segments, cfg)
+            return events, profiles
+
+        events, profiles = await asyncio.to_thread(_stage6)
+
+        _save_json(job_dir / "transcript.json",
+                   {"language": src_lang, "segments": segments, "events": events})
+
+        # разбор голосов — тоже в кэш сразу, до перевода и озвучки
+        stored = await asyncio.to_thread(source_cache.store_analysis, job_dir,
+                                         src_key, spk_hint)
+        if stored:
+            profiles = source_cache.load_profiles(stored)
 
     # ---------- 7. Перевод ----------
     await report(7)
     style = job.settings.get("translation_style", "normal")
     from core.translate import get_translator
     translator = get_translator(cfg, style)
-    if not same_lang or style == "street":
+
+    done_translation = _load_translated(job_dir, tgt_lang, len(segments))
+    if done_translation is not None:
+        # задачу уже переводили в этой же папке (продолжение после остановки) —
+        # десятки запросов к модели повторять незачем
+        log.info("Перевод взят из папки задачи: %d реплик", len(done_translation))
+        segments = done_translation
+        await hooks.report(7, "беру готовый перевод", 100)
+    elif not same_lang or style == "street":
         # уличный стиль применяется даже без смены языка (переозвучка со стёбом)
         await asyncio.to_thread(translator.translate_segments, segments,
                                 src_lang, tgt_lang, profiles, report_ts(7))
@@ -184,32 +275,70 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
     # ---------- 9. Синтез + подгонка таймингов ----------
     await report(9)
+    bank_mode = job.settings.get("voice_mode") == "bank"
+    if bank_mode:
+        from core import voicebank
+        assigned = await asyncio.to_thread(voicebank.assign, profiles)
+        if assigned:
+            for spk, voice in assigned.items():
+                prof = profiles[spk]
+                prof["ref_main"] = voice["path"]
+                prof["refs_emotion"] = {}
+                prof["ref_ok"] = True
+                prof["bank_voice"] = voice["name"]
+        else:
+            log.warning("Режим банка голосов включён, но банк пуст — "
+                        "озвучиваю клонами оригинала")
+            bank_mode = False
     placed = await asyncio.to_thread(
         _synthesize_all, job_dir, tmp_dir, segments, profiles, vocals_wav,
-        translator, tgt_lang, cfg, report_ts(9), hooks)
+        translator, tgt_lang, cfg, report_ts(9), hooks, bank_mode)
 
     # ---------- 10. Микс и сборка ----------
     await report(10)
     from core.mixer import build_mix
-    from core.mux import compress_to_limit, encode_audio_only, mux_video, write_srt
+    from core.mux import (TooLongForLimit, compress_to_limit, encode_audio_only,
+                          mux_video, write_srt)
 
     keep_bg = job.settings.get("keep_background", True)
     keep_orig = job.settings.get("keep_original_track", False)
+    title = _read_title(job_dir, cached_media)
+    if not title and job.kind == "local":
+        title = Path(job.payload).stem
 
-    def _stage10() -> tuple[Path, Path]:
+    def _stage10() -> tuple[Path | None, Path, Path, Path, list[Path]]:
+        """Возвращает (что отправить | None, файл в папке, srt, srt в папке, части)."""
         dubbed = build_mix(job_dir, background_wav, vocals_wav, placed,
                            events, cfg, keep_background=keep_bg)
         srt = write_srt(segments, job_dir / "subtitles.srt")
-        limit_mb = float(cfg.y("limits", "telegram_upload_mb", default=50))
-        if info.has_video:
-            out = mux_video(input_path, dubbed, job_dir / "result.mp4", cfg,
-                            original_audio=source_wav if keep_orig else None)
-            out = compress_to_limit(out, limit_mb, cfg)
-        else:
-            out = encode_audio_only(dubbed, job_dir / "result.m4a", cfg)
-        return out, srt
+        limit_mb = cfg.upload_limit_mb
+        base = _output_basename(title, job.id, tgt_lang)
 
-    output_path, srt_path = await asyncio.to_thread(_stage10)
+        if not info.has_video:
+            audio = encode_audio_only(dubbed, job_dir / "result.m4a", cfg)
+            saved = _save_output(audio, cfg, base, ".m4a")
+            saved_srt = _save_output(srt, cfg, base, ".srt", copy=True)
+            fits = saved.stat().st_size <= limit_mb * 1024 * 1024
+            return (saved if fits else None), saved, srt, saved_srt, []
+
+        out = mux_video(input_path, dubbed, job_dir / "result.mp4", cfg,
+                        original_audio=source_wav if keep_orig else None)
+        # тяжёлые дорожки больше не нужны — освобождаем диск до пережатия
+        _free_tracks(job_dir, [dubbed])
+
+        # готовый дубляж в полном качестве всегда ложится в папку готовых видео:
+        # даже если в Telegram он не влезет, работа не пропадает
+        saved = _save_output(out, cfg, base, ".mp4")
+        saved_srt = _save_output(srt, cfg, base, ".srt", copy=True)
+
+        try:
+            fitted = compress_to_limit(saved, limit_mb, cfg, out_dir=job_dir)
+            return fitted, saved, srt, saved_srt, []
+        except TooLongForLimit:
+            parts = _maybe_split(saved, limit_mb, cfg, job_dir)
+            return None, saved, srt, saved_srt, parts
+
+    output_path, saved_path, srt_path, saved_srt, parts = await asyncio.to_thread(_stage10)
 
     elapsed = time.monotonic() - t0
     summary = _build_summary(src_lang, tgt_lang, profiles, elapsed)
@@ -222,6 +351,9 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
         speakers=profiles,
         elapsed_s=elapsed,
         summary=summary,
+        parts=parts,
+        saved_path=saved_path,
+        saved_srt=saved_srt,
     )
 
 
@@ -230,7 +362,8 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
 def _synthesize_all(job_dir: Path, tmp_dir: Path, segments: list[dict],
                     profiles: dict, vocals_wav: Path, translator, tgt_lang: str,
-                    cfg, progress, hooks: PipelineHooks) -> list[dict]:
+                    cfg, progress, hooks: PipelineHooks,
+                    bank_mode: bool = False) -> list[dict]:
     """Синтез каждого сегмента + подгонка под слот (синхронно, в потоке)."""
     from core.normalize import normalize_for_tts
     from core.timing import STATUS_TOO_LONG, fit_to_slot
@@ -240,18 +373,69 @@ def _synthesize_all(job_dir: Path, tmp_dir: Path, segments: list[dict],
     synth_dir = job_dir / "synth"
     synth_dir.mkdir(exist_ok=True)
     atempo_max = cfg.atempo_max
-    speed_soft_max = float(cfg.y("timing", "speed_soft_max", default=1.3))
+    atempo_hard_max = float(cfg.y("timing", "atempo_hard_max", default=1.5))
+    speed_soft_max = float(cfg.y("timing", "speed_soft_max", default=1.15))
 
     to_do = [s for s in segments if not s.get("skip_tts") and s["text"].strip()]
     placed: list[dict] = []
+    limits = _slot_limits(segments, cfg)
+    failed = 0
+    # доля реплик, которую ещё допустимо потерять: на длинном ролике их тысячи,
+    # и «одна не синтезировалась» незаметно превращается в выпавшие куски диалога
+    max_failed = max(3, int(len(to_do) * float(
+        cfg.y("timing", "max_failed_ratio", default=0.05))))
 
+    # сначала одним махом укорачиваем всё, что заведомо не влезает в слоты:
+    # поштучные запросы из цикла ниже на длинном ролике стоят часов.
+    # уже озвученные реплики не трогаем — их звук готов
+    done_ids = _synth_done_ids(synth_dir)
+    pending = [s for s in to_do
+               if not _reusable_synth(synth_dir / f"seg_{s['id']}.wav",
+                                      done_ids, s["id"])]
+    _precompress(pending, limits, translator, tgt_lang, cfg,
+                 (lambda p: progress(max(1, p // 34))) if progress else None)
+
+    # измеренный темп речи каждого голоса (символов в секунду при speed=1.0):
+    # табличный темп ошибается на конкретном голосе, а лишний прогон синтеза
+    # стоит секунд — на тысячах реплик это часы
+    rates: dict[str, list[float]] = {}
+
+    def _guess_speed(text: str, speaker: str, slot: float) -> float:
+        samples = rates.get(speaker)
+        if not samples:
+            return 1.0
+        rate = sorted(samples)[len(samples) // 2]
+        need = len(text) / max(1e-6, rate)
+        if need <= slot * atempo_max:
+            return 1.0
+        return min(speed_soft_max, need / (slot * atempo_max))
+
+    reused = 0
     for i, seg in enumerate(to_do):
         if hooks.cancel_event is not None and hooks.cancel_event.is_set():
             raise JobCancelled()
 
-        slot = max(0.4, seg["end"] - seg["start"])
+        # продолжение прерванной задачи: реплика уже озвучена — берём как есть.
+        # на длинном ролике это часы работы, которые незачем повторять
+        ready = synth_dir / f"seg_{seg['id']}.wav"
+        if _reusable_synth(ready, done_ids, seg["id"]):
+            placed.append({"start": seg["start"], "path": str(ready),
+                           "id": seg["id"]})
+            reused += 1
+            if progress:
+                progress(int(100 * (i + 1) / max(1, len(to_do))))
+            continue
+
+        # реплика может звучать в паузу после себя — это лучше, чем ускорять
+        # её до неразборчивости или выбрасывать слова
+        slot = max(0.4, limits.get(seg["id"], seg["end"]) - seg["start"])
         profile = profiles.get(seg["speaker"], {})
-        speaker_wav, preset = choose_style_ref(seg, profile, vocals_wav, tmp_dir, cfg)
+        if bank_mode:
+            # голос из банка: всегда его референс, без вырезок оригинала
+            speaker_wav, preset = profile.get("ref_main"), None
+        else:
+            speaker_wav, preset = choose_style_ref(seg, profile, vocals_wav,
+                                                   tmp_dir, cfg)
 
         raw = synth_dir / f"seg_{seg['id']}_raw.wav"
         fitted = synth_dir / f"seg_{seg['id']}.wav"
@@ -261,17 +445,29 @@ def _synthesize_all(job_dir: Path, tmp_dir: Path, segments: list[dict],
                        speaker_wav=speaker_wav, preset=preset, speed=speed)
 
         try:
-            _synth(seg["text"])
+            # темп берём из уже измеренного для этого голоса: если реплика
+            # заведомо не влезает, синтезируем её ускоренной сразу, а не после
+            # лишнего прогона модели
+            speed = _guess_speed(seg["text"], seg["speaker"], slot)
+            _synth(seg["text"], speed=speed)
             fit = fit_to_slot(raw, fitted, slot, atempo_max)
+            rates.setdefault(seg["speaker"], []).append(
+                len(seg["text"]) / max(0.1, fit.duration) * speed)
+            del rates[seg["speaker"]][:-20]  # помним последние два десятка
 
             # мягкая подгонка параметром speed до применения atempo
-            if fit.status == STATUS_TOO_LONG and fit.tempo <= atempo_max * speed_soft_max:
-                _synth(seg["text"], speed=min(speed_soft_max, fit.tempo))
+            if (fit.status == STATUS_TOO_LONG and speed < speed_soft_max
+                    and fit.tempo <= atempo_max * speed_soft_max):
+                speed = min(speed_soft_max, speed * fit.tempo)
+                _synth(seg["text"], speed=speed)
                 fit = fit_to_slot(raw, fitted, slot, atempo_max)
 
             if fit.status == STATUS_TOO_LONG:
-                # запросить у переводчика сжатый вариант и синтезировать заново
-                max_chars = compute_max_chars(seg, tgt_lang, cfg)
+                # бюджет из фактически измеренной длительности: реальный темп
+                # ЭТОГО голоса точнее табличных символов в секунду
+                rate = len(seg["text"]) / max(0.1, fit.duration)
+                max_chars = max(10, int(slot * rate))
+                max_chars = min(max_chars, compute_max_chars(seg, tgt_lang, cfg, slot))
                 compressed = translator.compress_segment(seg["text"], max_chars,
                                                          tgt_lang)
                 compressed = normalize_for_tts(compressed, tgt_lang)
@@ -281,29 +477,332 @@ def _synthesize_all(job_dir: Path, tmp_dir: Path, segments: list[dict],
                     fit = fit_to_slot(raw, fitted, slot, atempo_max)
 
             if fit.status == STATUS_TOO_LONG:
-                # последний резерв: максимальное ускорение, лёгкий заход на паузу
-                log.warning("Сегмент %s не влез даже после сжатия (×%.2f)",
-                            seg["id"], fit.tempo)
+                # последний резерв: ускоряем, но не дальше порога разборчивости —
+                # лучше немного выйти за слот, чем произнести неразличимо
+                tempo = min(fit.tempo, atempo_hard_max)
+                log.warning("Сегмент %s: нужно ×%.2f, ускоряю до ×%.2f",
+                            seg["id"], fit.tempo, tempo)
                 from core.media import run as ffrun
                 ffrun(["ffmpeg", "-y", "-i", str(raw),
-                       "-filter:a", f"atempo={atempo_max}",
+                       "-filter:a", f"atempo={tempo:.6f}",
                        "-c:a", "pcm_s16le", str(fitted)], desc="ffmpeg atempo max")
 
             placed.append({"start": seg["start"], "path": str(fitted),
                            "id": seg["id"]})
+            _mark_synth_done(synth_dir, seg["id"])
         except AssertionError:
             raise
         except Exception:  # noqa: BLE001 — один сломанный сегмент не валит задачу
             log.exception("Синтез сегмента %s не удался, пропускаю", seg["id"])
+            failed += 1
+            _free_vram()
+            if failed > max_failed:
+                # дальше нет смысла: скорее всего кончилась видеопамять или
+                # отвалилась модель, и мы соберём дубляж с дырами вместо речи
+                raise UserError(
+                    f"Синтез сорвался на {failed} репликах из {len(to_do)} — "
+                    "похоже, не хватает видеопамяти. Закройте другие задачи "
+                    "на видеокарте и пришлите ролик снова."
+                )
         finally:
             raw.unlink(missing_ok=True)
 
         if progress:
             progress(int(100 * (i + 1) / max(1, len(to_do))))
 
+    if reused:
+        log.info("Взято готовых реплик: %d из %d", reused, len(to_do))
     if not placed:
         raise UserError("Не удалось синтезировать ни одного сегмента речи.")
     return placed
+
+
+def _check_disk(job_dir: Path, duration: float, input_path: Path, cfg) -> None:
+    """Хватит ли места на дорожки и результат.
+
+    Пайплайн держит на диске несжатый звук: source + vocals + background +
+    dubbed — около 0.7 МБ на секунду ролика. На двухчасовом видео это ~5 ГБ
+    плюс сам файл и результат. Узнать об этом лучше сейчас, чем через час
+    обработки на записи микса.
+    """
+    if duration <= 0:
+        return
+    mb_per_s = float(cfg.y("limits", "disk_mb_per_second", default=0.9))
+    try:
+        input_gb = input_path.stat().st_size / 1e9
+    except OSError:
+        input_gb = 0.0
+    need_gb = duration * mb_per_s / 1000 + input_gb * 1.5 + 1.0
+    free_gb = media.free_disk_gb(job_dir)
+    log.info("Диск: нужно ~%.1f ГБ, свободно %.1f ГБ", need_gb, free_gb)
+    if free_gb < need_gb:
+        raise UserError(
+            f"Не хватает места на диске: ролику на {duration / 60:.0f} мин нужно "
+            f"около {need_gb:.0f} ГБ, а свободно {free_gb:.0f} ГБ. "
+            "Освободите место и пришлите ссылку снова."
+        )
+
+
+def _should_cache_media(duration: float, input_path: Path, cfg,
+                        job_dir: Path) -> bool:
+    """Класть ли дорожки источника в кэш.
+
+    Час несжатого звука — около 3 ГБ, поэтому длинный ролик кэшируем только
+    когда на диске остаётся ощутимый запас. Кэш того стоит: повторный прогон
+    с другим числом спикеров иначе заново качает и заново гоняет Demucs.
+    """
+    if duration <= cfg.cache_max_source_s:
+        return True
+    try:
+        input_gb = input_path.stat().st_size / 1e9
+    except OSError:
+        input_gb = 0.0
+    need_gb = duration * 0.8 / 1000 + input_gb
+    keep_free = float(cfg.y("cache", "keep_free_gb", default=15))
+    free_gb = media.free_disk_gb(job_dir)
+    ok = free_gb - need_gb >= keep_free
+    log.info("Кэш медиа: %s (нужно %.1f ГБ, свободно %.1f ГБ)",
+             "сохраняю" if ok else "пропускаю", need_gb, free_gb)
+    return ok
+
+
+def _free_tracks(job_dir: Path, extra: list[Path]) -> None:
+    """Удаляет несжатые дорожки задачи: после микса они больше не нужны.
+
+    Трогаем только файлы самой задачи — то, что уехало в кэш, лежит в другой
+    папке и должно там остаться.
+    """
+    names = ["source.wav", "vocals.wav", "background.wav",
+             "analysis.wav", "vocals16.wav"]
+    freed = 0
+    for path in [job_dir / n for n in names] + [Path(p) for p in extra]:
+        try:
+            if path.parent == job_dir and path.exists():
+                freed += path.stat().st_size
+                path.unlink()
+        except OSError:
+            log.warning("Не удалось удалить временную дорожку %s", path)
+    if freed:
+        log.info("Освободил %.1f ГБ временных дорожек", freed / 1e9)
+
+
+def _read_title(job_dir: Path, cached_media: Path | None) -> str:
+    for folder in (job_dir, cached_media):
+        if not folder:
+            continue
+        path = folder / "title.txt"
+        if path.exists():
+            try:
+                return path.read_text(encoding="utf-8").strip()
+            except OSError:
+                pass
+    return ""
+
+
+_BAD_CHARS = '<>:"/\\|?*\n\r\t'
+
+
+def _output_basename(title: str, job_id: str, tgt_lang: str) -> str:
+    """Имя файла в папке готовых видео: название ролика + язык озвучки."""
+    clean = "".join(" " if c in _BAD_CHARS else c for c in title).strip()
+    clean = " ".join(clean.split())[:80].strip(" .")
+    stamp = time.strftime("%Y-%m-%d")
+    return f"{stamp} {clean or job_id} [{tgt_lang}]"
+
+
+def _save_output(src: Path, cfg, base: str, ext: str, copy: bool = False) -> Path:
+    """Кладёт файл в папку готовых видео, не затирая уже лежащий там."""
+    out_dir = cfg.output_dir
+    dst = out_dir / f"{base}{ext}"
+    n = 2
+    while dst.exists():
+        dst = out_dir / f"{base} ({n}){ext}"
+        n += 1
+    if copy:
+        shutil.copy2(src, dst)
+    else:
+        shutil.move(str(src), str(dst))
+    log.info("Готовый файл: %s", dst)
+    return dst
+
+
+def _maybe_split(video: Path, limit_mb: float, cfg, job_dir: Path) -> list[Path]:
+    """Части для чата — только если их немного. Иначе результат ждёт в папке."""
+    from core.mux import plan_parts, split_to_parts
+
+    max_parts = int(cfg.y("output", "max_parts", default=6))
+    count = plan_parts(video, limit_mb)
+    if max_parts and count > max_parts:
+        log.info("Понадобилось бы %d частей — не режу, файл остаётся в папке",
+                 count)
+        return []
+    if media.free_disk_gb(job_dir) < video.stat().st_size / 1e9 * 1.2:
+        log.info("Мало места для нарезки на части — файл остаётся в папке")
+        return []
+    return split_to_parts(video, limit_mb, out_dir=job_dir)
+
+
+def _load_translated(job_dir: Path, tgt_lang: str, count: int) -> list[dict] | None:
+    """Готовый перевод из папки задачи — если это продолжение прерванной работы.
+
+    Подходит только когда язык тот же и реплик столько же: иначе разбор
+    изменился и старый перевод к нему не относится.
+    """
+    path = job_dir / "translated.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        log.warning("Не удалось прочитать сохранённый перевод — перевожу заново")
+        return None
+    segments = data.get("segments") or []
+    if data.get("language") != tgt_lang or len(segments) != count:
+        log.info("Сохранённый перевод не подходит (язык %s, реплик %d) — заново",
+                 data.get("language"), len(segments))
+        return None
+    return segments
+
+
+SYNTH_DONE = "done.txt"
+
+
+def _synth_done_ids(synth_dir: Path) -> set[int]:
+    """Реплики, озвучка которых точно доведена до конца.
+
+    Судить по самому файлу нельзя: оборванный wav выглядит целым — длину
+    libsndfile берёт из заголовка. Поэтому id дописывается в журнал ПОСЛЕ
+    того, как файл закрыт; оборвали задачу — последняя строка просто не
+    успела появиться, и реплика переозвучится.
+    """
+    path = synth_dir / SYNTH_DONE
+    if not path.exists():
+        return set()
+    ids = set()
+    try:
+        lines = path.read_text(encoding="utf-8").split("\n")
+        # последняя строка без перевода строки могла не дописаться (обрыв
+        # посреди записи превратил бы «1234» в «12» — чужой номер)
+        if lines and lines[-1] != "":
+            lines = lines[:-1]
+        for line in lines:
+            line = line.strip()
+            if line.isdigit():
+                ids.add(int(line))
+    except OSError:
+        log.warning("Журнал озвученных реплик не читается — озвучиваю заново")
+    return ids
+
+
+def _mark_synth_done(synth_dir: Path, seg_id: int) -> None:
+    try:
+        with open(synth_dir / SYNTH_DONE, "a", encoding="utf-8") as f:
+            f.write(f"{seg_id}\n")
+            f.flush()
+    except OSError:
+        log.warning("Не удалось отметить реплику %s в журнале", seg_id)
+
+
+def _reusable_synth(path: Path, done: set[int], seg_id: int) -> bool:
+    """Готова ли реплика: есть в журнале и файл на месте."""
+    return seg_id in done and path.exists() and path.stat().st_size > 1000
+
+
+def _precompress(segments: list[dict], limits: dict[int, float], translator,
+                 tgt_lang: str, cfg, progress=None) -> int:
+    """Заранее укорачивает реплики, которые не поместятся даже с ускорением.
+
+    Иначе то же самое делается в цикле синтеза по одной реплике: на часовом
+    ролике это сотни отдельных обращений к модели, и они стоят дороже самого
+    синтеза. Считаем бюджет по табличному темпу речи и просим сократить
+    пачкой; не получилось — цикл синтеза разберётся сам, как и раньше.
+    """
+    if not bool(cfg.y("translation", "precompress", default=True)):
+        return 0
+    compress_batch = getattr(translator, "compress_batch", None)
+    if compress_batch is None:
+        return 0
+
+    from core.normalize import normalize_for_tts
+    from core.translate import compute_max_chars
+
+    atempo = cfg.atempo_max * float(cfg.y("timing", "speed_soft_max", default=1.15))
+    ratio = float(cfg.y("translation", "precompress_ratio", default=1.15))
+    batch_size = int(cfg.y("translation", "precompress_batch", default=30))
+
+    items, budgets = [], {}
+    for seg in segments:
+        if seg.get("skip_tts") or not seg["text"].strip():
+            continue
+        slot = max(0.4, limits.get(seg["id"], seg["end"]) - seg["start"])
+        # сколько символов реально произносится в слоте с допустимым ускорением
+        budget = compute_max_chars(seg, tgt_lang, cfg, slot * atempo)
+        if len(seg["text"]) > budget * ratio:
+            items.append({"id": seg["id"], "max_chars": budget,
+                          "text": seg["text"]})
+            budgets[seg["id"]] = budget
+    if not items:
+        return 0
+
+    log.info("Предварительное сжатие: %d реплик из %d не влезают в слоты",
+             len(items), len(segments))
+    by_id = {s["id"]: s for s in segments}
+    changed = 0
+    for i in range(0, len(items), batch_size):
+        batch = items[i:i + batch_size]
+        try:
+            result = compress_batch(batch, tgt_lang)
+        except Exception:  # noqa: BLE001 — сжатие необязательно
+            log.exception("Предварительное сжатие: пачка не удалась")
+            result = {}
+        for seg_id, text in result.items():
+            seg = by_id.get(seg_id)
+            if not seg or not text.strip():
+                continue
+            # длиннее исходного — это не сокращение, а пересказ: не берём
+            if len(text) >= len(seg["text"]):
+                continue
+            seg["text"] = normalize_for_tts(text, tgt_lang)
+            changed += 1
+        if progress:
+            progress(int(100 * min(len(items), i + batch_size) / len(items)))
+    log.info("Предварительное сжатие: укорочено %d реплик", changed)
+    return changed
+
+
+def _free_vram() -> None:
+    """Отдать кэш видеопамяти обратно: следующая реплика может уместиться."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 — без CUDA чистить нечего
+        pass
+
+
+def _slot_limits(segments: list[dict], cfg) -> dict[int, float]:
+    """До какого момента каждая реплика может звучать.
+
+    Слот = её собственная длительность плюс пауза до следующей реплики
+    (любого спикера) минус зазор. Это снимает нужду в сильном ускорении:
+    в оригинале между фразами почти всегда есть тишина.
+    """
+    import bisect
+
+    guard = float(cfg.y("timing", "gap_guard_ms", default=80)) / 1000
+    max_extend = float(cfg.y("timing", "max_extend_s", default=1.5))
+    starts = sorted(s["start"] for s in segments)
+
+    limits: dict[int, float] = {}
+    for s in segments:
+        limit = s["end"] + max_extend
+        idx = bisect.bisect_right(starts, s["start"])
+        if idx < len(starts):
+            limit = min(limit, starts[idx] - guard)
+        # при наложении речи следующая реплика может начаться раньше конца этой
+        limits[s["id"]] = max(s["end"], limit)
+    return limits
 
 
 def _norm_lang(code: str) -> str:
@@ -321,8 +820,10 @@ def _build_summary(src_lang: str, tgt_lang: str, profiles: dict,
     src_name = TTS_LANGUAGES.get(_norm_lang(src_lang), src_lang)
     tgt_name = TTS_LANGUAGES.get(tgt_lang, tgt_lang)
     spk_lines = "\n".join(
-        f"  • {p['id']} — {GENDER_RU.get(p['gender'], p['gender'])} "
-        f"(уверенность {p['gender_confidence']:.0%})"
+        f"  • {p['id']} — {GENDER_RU.get(p['gender'], p['gender'])}"
+        + (" (ребёнок)" if p.get("age") == "child" else "")
+        + f" (уверенность {p['gender_confidence']:.0%})"
+        + (f", голос: {p['bank_voice']}" if p.get("bank_voice") else "")
         for p in profiles.values()
     )
     mm, ss = divmod(int(elapsed), 60)
@@ -343,10 +844,24 @@ KEEP_FILES = {"speakers.json", "transcript.json", "translated.json", "job.log"}
 
 
 def cleanup_job(job_id: str) -> None:
-    """После отправки результата удаляем медиа, оставляем логи и speakers.json."""
+    """После отправки результата удаляем медиа, оставляем логи и speakers.json.
+
+    Перед удалением артефакты анализа переезжают в кэш источника —
+    повторная обработка того же ролика начнётся сразу с перевода.
+    """
     job_dir = JOBS_DIR / job_id
     if not job_dir.exists():
         return
+    key_file = job_dir / "cache_key.txt"
+    if key_file.exists():
+        try:
+            from core import cache as source_cache
+            key, _, hint = key_file.read_text(encoding="utf-8").strip().partition("\n")
+            if not (job_dir / NO_MEDIA_CACHE).exists():
+                source_cache.store_media(job_dir, key)
+            source_cache.store_analysis(job_dir, key, hint or "auto")
+        except Exception:  # noqa: BLE001 — кэш не должен ломать очистку
+            log.exception("Кэш: не удалось сохранить артефакты задачи %s", job_id)
     for item in job_dir.iterdir():
         if item.name in KEEP_FILES:
             continue

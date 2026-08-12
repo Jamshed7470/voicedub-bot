@@ -8,7 +8,26 @@ from core.errors import UserError
 log = logging.getLogger(__name__)
 
 
-def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg) -> list[dict]:
+def _speaker_bounds(hint: str, cfg) -> tuple[int | None, int | None, int | None]:
+    """Подсказка о числе голосов → (num, min, max) для pyannote.
+
+    Без подсказки pyannote кластеризует консервативно и сливает похожие
+    голоса — на многоголосых роликах это даёт 2 спикера вместо шести.
+    """
+    hint = (hint or "auto").strip()
+    cap = int(cfg.y("diarization", "max_speakers", default=60))
+    if not hint.isdigit():
+        # «авто»: верхнюю границу задаём щедро — на фильме бывает 20-30+ голосов,
+        # низкий cap схлопывал их в 10 кластеров и один голос доставался многим
+        return None, None, cap
+    n = int(hint)
+    if n >= 10:  # «10+» — верхнюю границу не угадать, задаём только нижнюю
+        return None, max(9, n), max(cap, n)
+    return n, None, None
+
+
+def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
+                       speakers_hint: str = "auto") -> list[dict]:
     """Определяет спикеров и присваивает их сегментам/словам.
 
     Возвращает список сегментов:
@@ -34,8 +53,19 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg) -> list[dict]:
         except ImportError:  # старые версии
             DiarizationPipeline = whisperx.DiarizationPipeline
         pipeline = DiarizationPipeline(use_auth_token=cfg.hf_token, device=cfg.device)
+        threshold = cfg.y("diarization", "clustering_threshold", default=None)
+        if threshold:
+            # ниже порога — охотнее разделяет похожие голоса
+            try:
+                pipeline.model.clustering.threshold = float(threshold)
+            except AttributeError:
+                log.warning("pyannote: не удалось задать порог кластеризации")
+        num, mn, mx = _speaker_bounds(speakers_hint, cfg)
+        log.info("Диаризация: подсказка «%s» → num=%s min=%s max=%s",
+                 speakers_hint, num, mn, mx)
         audio = whisperx.load_audio(str(analysis_wav))
-        diarization = pipeline(audio)
+        diarization = pipeline(audio, num_speakers=num,
+                               min_speakers=mn, max_speakers=mx)
     except UserError:
         raise
     except Exception as e:  # noqa: BLE001
@@ -54,6 +84,7 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg) -> list[dict]:
     mapping: dict[str, str] = {}
     out: list[dict] = []
     last_speaker = None
+    orphans = 0
     for seg in segments:
         text = (seg.get("text") or "").strip()
         if not text:
@@ -62,6 +93,7 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg) -> list[dict]:
         if raw is None:
             # у сегмента нет спикера (тихая речь) — приписать предыдущему
             raw = last_speaker or "SPEAKER_00"
+            orphans += 1
         last_speaker = raw
         if raw not in mapping:
             mapping[raw] = f"S{len(mapping) + 1}"
@@ -79,7 +111,8 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg) -> list[dict]:
     )
     for i, seg in enumerate(out, 1):
         seg["id"] = i
-    log.info("Диаризация: %d сегментов, %d спикеров", len(out), len(mapping))
+    log.info("Диаризация: %d сегментов, %d спикеров%s", len(out), len(mapping),
+             f", без метки спикера: {orphans}" if orphans else "")
     return out
 
 

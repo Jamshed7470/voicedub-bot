@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
 log = logging.getLogger(__name__)
 
@@ -35,9 +36,134 @@ LANG_NAMES_RU = {
 }
 
 
-def compute_max_chars(seg: dict, tgt_lang: str, cfg) -> int:
-    dur = max(0.5, seg["end"] - seg["start"])
+def compute_max_chars(seg: dict, tgt_lang: str, cfg, slot_s: float | None = None) -> int:
+    """Сколько символов помещается в слот. slot_s — если слот расширен паузой."""
+    dur = max(0.5, slot_s if slot_s else seg["end"] - seg["start"])
     return max(10, int(dur * cfg.speech_rate(tgt_lang)))
+
+
+def collapse_repeats(text: str) -> str:
+    """Схлопывает зацикленные повторы в переводе.
+
+    Локальная модель на неуверенном фрагменте уходит в цикл и выдаёт одну
+    и ту же фразу десятки раз. Штрафы при генерации ловят не всё, поэтому
+    повторы убираются и на выходе.
+    """
+    if not text:
+        return text
+    # повторяющиеся предложения
+    parts = re.split(r"(?<=[.!?…])\s+", text)
+    seen, kept = set(), []
+    for p in parts:
+        key = p.strip().lower()
+        if key and key in seen:
+            continue
+        seen.add(key)
+        kept.append(p)
+    text = " ".join(kept)
+
+    # повторяющиеся куски внутри предложения («и застрял…, и застрял…»)
+    clauses = re.split(r",\s*", text)
+    if len(clauses) > 2:
+        seen, kept = set(), []
+        for c in clauses:
+            key = c.strip().lower()
+            if key and key in seen:
+                continue
+            seen.add(key)
+            kept.append(c)
+        text = ", ".join(kept)
+
+    # хвост из одного повторяющегося слова
+    text = re.sub(r"\b(\w+)(\s+\1\b){2,}", r"\1", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def spoken_len(text: str, lang: str) -> int:
+    """Длина текста в произносимом виде.
+
+    Меряем ПОСЛЕ раскрытия чисел словами: «5%» — два символа, а вслух это
+    «пять процентов» — четырнадцать. Замер до нормализации занижает бюджет
+    на каждом сегменте с числами.
+    """
+    from core.normalize import normalize_for_tts
+    try:
+        return len(normalize_for_tts(text, lang))
+    except Exception:  # noqa: BLE001 — нормализация не должна ломать перевод
+        return len(text)
+
+
+# Рычаги и запреты для подгонки длины: модель сначала подбирает комбинацию
+# рычагов на нужную дельту и только потом собирает фразу. Попытка дописать
+# или обрезать готовое предложение всегда даёт неестественный результат.
+LENGTH_RULES = """РЫЧАГИ
+  Сократить: убрать вводное (меня зовут → я), опустить местоимение
+    (я живу → живу), синоним короче (автомобиль → машина), свернуть перифраз
+    (в настоящее время → сейчас), убрать усилитель (очень сильно → сильно).
+  Удлинить: синоним длиннее (живу → проживаю), уточнитель времени
+    (сейчас, уже, теперь), вводная конструкция, обращение (Слушай, Друзья),
+    полная форма названия.
+
+ПОРЯДОК: сначала подбери комбинацию рычагов ровно на нужную дельту,
+потом собери фразу целиком.
+
+ЗАПРЕЩЕНО: терять или добавлять факты, менять смысл, тон и обращение
+(ты/вы), превращать вопрос в утверждение, обрывать фразу на полуслове,
+выбрасывать значимые слова, добивать длину словами-филлерами,
+оставлять цифры — все числа словами.
+
+Ответ — только текст реплики, без пояснений и кавычек."""
+
+
+def fit_length_verified(call, text: str, target: int, tgt_lang: str,
+                        lo_ratio: float = 0.0, tries: int = 2,
+                        style: str = "") -> str:
+    """Подгоняет реплику под бюджет символов. Длину считает КОД, не модель.
+
+    Модели систематически ошибаются в подсчёте символов, поэтому просить
+    «уложись в N» бесполезно: меряем сами и возвращаем точную дельту.
+    lo_ratio > 0 — нижняя граница (реплика не должна стать слишком короткой).
+    Возвращает лучший из вариантов; исходный текст, если улучшить не вышло.
+    """
+    lo = int(target * lo_ratio)
+    lang_ru = LANG_NAMES_RU.get(tgt_lang, tgt_lang)
+    system = (f"Ты редактируешь реплику дубляжа на языке «{lang_ru}». "
+              f"{style}\n\n{LENGTH_RULES}")
+
+    def miss(s: str) -> int:
+        """Насколько промахнулись мимо коридора [lo, target]."""
+        n = spoken_len(s, tgt_lang)
+        if n > target:
+            return n - target
+        return lo - n if n < lo else 0
+
+    best, best_miss = text, miss(text)
+    for _ in range(tries):
+        if best_miss == 0:
+            return best
+        cur = spoken_len(best, tgt_lang)
+        delta = target - cur if cur > target else lo - cur
+        action = "Убери" if delta < 0 else "Добавь"
+        try:
+            out = call(system,
+                       f"Реплика: {best}\n\n"
+                       f"Сейчас {cur} символов в произносимом виде, нужно "
+                       f"{'не больше ' + str(target) if delta < 0 else 'не меньше ' + str(lo)}. "
+                       f"{action} ровно {abs(delta)} символов, смысл сохрани.").strip()
+        except Exception:  # noqa: BLE001
+            log.exception("Подгонка длины: запрос к модели не удался")
+            return best
+        out = out.strip('"«» ')
+        # огрызок вместо реплики — откатываемся на предыдущий вариант
+        if not out or spoken_len(out, tgt_lang) < max(3, target // 4):
+            continue
+        out_miss = miss(out)
+        if out_miss < best_miss:
+            best, best_miss = out, out_miss
+    if best_miss:
+        log.info("Подгонка длины: осталось %d символов мимо бюджета %d",
+                 best_miss, target)
+    return best
 
 
 def get_translator(cfg, style: str = "normal"):
@@ -137,12 +263,16 @@ class ClaudeTranslator:
             user += "Переведи сегменты:\n" + json.dumps(payload, ensure_ascii=False)
 
             translated = None
-            for attempt in (1, 2):
+            for attempt in (1, 2, 3):
                 try:
                     translated = self._extract_json(self._call(system, user))
                     break
                 except Exception:  # noqa: BLE001
                     log.exception("Claude: ошибка перевода окна (попытка %d)", attempt)
+                    # на длинном ролике окон десятки: упереться в лимит запросов
+                    # легко, а повтор без паузы упрётся в него же
+                    if attempt < 3:
+                        time.sleep(5 * attempt)
             if translated:
                 by_id = {t.get("id"): t.get("text", "") for t in translated
                          if isinstance(t, dict)}
@@ -162,18 +292,47 @@ class ClaudeTranslator:
 
     def compress_segment(self, text: str, max_chars: int, tgt_lang: str) -> str:
         """Сжатый вариант перевода сегмента без потери смысла (length-aware)."""
-        try:
-            out = self._call(
-                f"Ты сокращаешь реплики для дубляжа на языке "
-                f"«{LANG_NAMES_RU.get(tgt_lang, tgt_lang)}». Сохраняй смысл. "
-                f"Все числа — словами, цифры запрещены. "
-                f"Ответ — только сокращённый текст, без пояснений.",
-                f"Сократи до {max_chars} символов:\n{text}",
-            ).strip()
-            return out or text
-        except Exception:  # noqa: BLE001
-            log.exception("Claude: не удалось сжать сегмент")
-            return text
+        return fit_length_verified(self._call, text, max_chars, tgt_lang,
+                                   style="Сохраняй смысл и естественность речи.")
+
+    def compress_batch(self, items: list[dict], tgt_lang: str) -> dict[int, str]:
+        """Укорачивает пачку реплик одним запросом.
+
+        В цикле синтеза сжатие вызывается по одной реплике, и на длинном
+        ролике это сотни отдельных обращений к модели — дороже самого синтеза.
+        Здесь то же самое делается пачками: {id: сокращённый текст}.
+        """
+        if not items:
+            return {}
+        lang = LANG_NAMES_RU.get(tgt_lang, tgt_lang)
+        system = (
+            f"Ты редактор дубляжа. Сокращаешь реплики на {lang} языке так, "
+            "чтобы они произносились быстрее и укладывались в отведённое время.\n"
+            "Правила:\n"
+            "1. Смысл сохраняется полностью, тон и стиль реплики — тоже.\n"
+            "2. Убираются повторы, вводные слова, избыточные уточнения.\n"
+            "3. Длина текста НЕ БОЛЬШЕ поля max_chars (символов).\n"
+            "4. Никаких цифр — числа только словами.\n"
+            "5. Ответ — СТРОГО тот же JSON-массив с теми же id, "
+            "изменено только поле text. Никакого текста вне JSON."
+        )
+        user = "Сократи реплики:\n" + json.dumps(items, ensure_ascii=False)
+        for attempt in (1, 2):
+            try:
+                data = self._extract_json(self._call(system, user))
+                out = {}
+                for row in data:
+                    if not isinstance(row, dict):
+                        continue
+                    text = (row.get("text") or "").strip()
+                    if text:
+                        out[row.get("id")] = text
+                return out
+            except Exception:  # noqa: BLE001 — не сжали, синтез разберётся сам
+                log.exception("Claude: сжатие пачки не удалось (попытка %d)", attempt)
+                if attempt < 2:
+                    time.sleep(5)
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +345,8 @@ class NLLBTranslator:
         self.model_name = cfg.nllb_model
         self._model = None
         self._tokenizer = None
+        # сокращать реплики NLLB не умеет — при наличии ключа поручаем это Grok
+        self._shortener = GrokTranslator(cfg) if cfg.xai_api_key else None
 
     def _load(self, src_flores: str):
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
@@ -225,24 +386,29 @@ class NLLBTranslator:
             if self.cfg.device == "cuda":
                 inputs = {k: v.to("cuda") for k, v in inputs.items()}
             with torch.no_grad():
+                # без штрафов NLLB зацикливается: «и застрял… и застрял…»
+                # до сотен символов — такую реплику XTTS уже не осилит
                 out = model.generate(**inputs, forced_bos_token_id=bos,
-                                     max_length=512, num_beams=4)
+                                     max_length=512, num_beams=4,
+                                     no_repeat_ngram_size=4,
+                                     repetition_penalty=1.15)
             for s, ids in zip(batch, out):
-                s["text"] = tok.decode(ids, skip_special_tokens=True).strip()
+                text = tok.decode(ids, skip_special_tokens=True).strip()
+                s["text"] = collapse_repeats(text)
             if progress:
                 progress(min(100, int(100 * (i + len(batch)) / len(segments))))
 
     def compress_segment(self, text: str, max_chars: int, tgt_lang: str) -> str:
-        # NLLB не умеет сжимать по инструкции — оставляем как есть,
-        # ужмётся atempo (или обрежется мягко по границе предложения)
-        if len(text) <= max_chars * 1.6:
+        """Сокращение без потери слов.
+
+        NLLB не умеет сокращать по инструкции, а обрезать текст нельзя —
+        так из реплики пропадают слова («…закончить хотим.» → «…закончить .»).
+        Если есть ключ xAI, сокращаем осмысленно через Grok, иначе оставляем
+        реплику целой: лучше слегка выйти в паузу, чем потерять смысл.
+        """
+        if self._shortener is None:
             return text
-        cut = text[: int(max_chars * 1.5)]
-        for sep in (". ", "! ", "? ", ", "):
-            pos = cut.rfind(sep)
-            if pos > max_chars // 2:
-                return cut[: pos + 1].strip()
-        return cut.strip()
+        return self._shortener.shorten_neutral(text, max_chars, tgt_lang)
 
 
 # ---------------------------------------------------------------------------
@@ -298,20 +464,11 @@ class GrokTranslator:
         return resp.json()["choices"][0]["message"]["content"]
 
     def _fit_length(self, text: str, len_target: int, tgt_lang: str) -> str:
-        """Дожимает/растягивает сегмент до 90–110% длины оригинала (одна попытка)."""
-        try:
-            out = self._call(
-                f"Ты редактируешь реплику дубляжа в уличном стиле на языке "
-                f"«{LANG_NAMES_RU.get(tgt_lang, tgt_lang)}». Сохрани смысл и дерзость. "
-                f"Все числа — словами, цифры запрещены. Ответ — только текст реплики.",
-                f"Перепиши эту реплику так, чтобы её длина была от "
-                f"{int(len_target * self.len_min)} до {int(len_target * self.len_max)} "
-                f"символов:\n{text}",
-            ).strip()
-            return out or text
-        except Exception:  # noqa: BLE001
-            log.exception("Grok: не удалось подогнать длину сегмента")
-            return text
+        """Дожимает/растягивает реплику в коридор бюджета. Длину считает код."""
+        return fit_length_verified(
+            self._call, text, int(len_target * self.len_max), tgt_lang,
+            lo_ratio=self.len_min / self.len_max,
+            style="Сохрани смысл и дерзкую уличную подачу.")
 
     def translate_segments(self, segments: list[dict], src_lang: str,
                            tgt_lang: str, speakers: dict, progress=None) -> None:
@@ -327,13 +484,16 @@ class GrokTranslator:
         i = 0
         while i < len(segments):
             batch = segments[i:i + window]
-            originals = {s["id"]: s["text"] for s in batch}
+            # бюджет — по длительности реплики, а не по символам оригинала:
+            # в оригинале «5%» это два символа, вслух — «пять процентов»
+            budgets = {s["id"]: compute_max_chars(s, tgt_lang, self.cfg)
+                       for s in batch}
             payload = [
                 {
                     "id": s["id"],
                     "speaker": s["speaker"],
                     "gender": speakers.get(s["speaker"], {}).get("gender", "unknown"),
-                    "len_target": len(s["text"]),
+                    "len_target": budgets[s["id"]],
                     "text": s["text"],
                 }
                 for s in batch
@@ -344,13 +504,15 @@ class GrokTranslator:
             user += "Переведи сегменты:\n" + json.dumps(payload, ensure_ascii=False)
 
             translated = None
-            for attempt in (1, 2):
+            for attempt in (1, 2, 3):
                 try:
                     translated = ClaudeTranslator._extract_json(
                         self._call(system, user))
                     break
                 except Exception:  # noqa: BLE001
                     log.exception("Grok: ошибка перевода окна (попытка %d)", attempt)
+                    if attempt < 3:
+                        time.sleep(5 * attempt)
             if translated:
                 by_id = {t.get("id"): t.get("text", "") for t in translated
                          if isinstance(t, dict)}
@@ -358,9 +520,9 @@ class GrokTranslator:
                     new = (by_id.get(s["id"]) or "").strip()
                     if not new:
                         continue
-                    # контроль длины: 90–110% оригинала
-                    target = max(1, len(originals[s["id"]]))
-                    ratio = len(new) / target
+                    # длину считает код — по произносимому виду реплики
+                    target = max(1, budgets[s["id"]])
+                    ratio = spoken_len(new, tgt_lang) / target
                     if ratio < self.len_min - 0.05 or ratio > self.len_max + 0.05:
                         new = self._fit_length(new, target, tgt_lang)
                     s["text"] = new
@@ -376,3 +538,15 @@ class GrokTranslator:
 
     def compress_segment(self, text: str, max_chars: int, tgt_lang: str) -> str:
         return self._fit_length(text, max_chars, tgt_lang)
+
+    def shorten_neutral(self, text: str, max_chars: int, tgt_lang: str) -> str:
+        """Сокращение без стилизации — для локального переводчика."""
+        out = fit_length_verified(
+            self._call, text, max_chars, tgt_lang,
+            style="Сохраняй смысл и естественность речи, стиль не меняй.")
+        # вернуть завершающий знак: без него XTTS теряет интонацию конца фразы
+        if out is not text and not out.endswith((".", "!", "?", "…")):
+            tail = text.rstrip()[-1:]
+            if tail in ".!?…":
+                out += tail
+        return out

@@ -143,11 +143,13 @@ def build_profiles(job_dir: str | Path, vocals_wav: str | Path,
             "gender": g["gender"],
             "gender_confidence": g["confidence"],
             "f0_median": g["f0_median"],
+            "age": g.get("age", "adult"),
             "segments": len(segs),
             "speech_total_s": round(sum(s["end"] - s["start"] for s in segs), 2),
         }
-        log.info("Спикер %s: %s (conf %.2f), референс %.1f с, сегментов %d",
-                 spk, g["gender"], g["confidence"], ref_total, len(segs))
+        log.info("Спикер %s: %s%s (conf %.2f), референс %.1f с, сегментов %d",
+                 spk, g["gender"], " (ребёнок)" if g.get("age") == "child" else "",
+                 g["confidence"], ref_total, len(segs))
         if progress:
             progress(int(100 * (idx + 1) / len(speaker_ids)))
 

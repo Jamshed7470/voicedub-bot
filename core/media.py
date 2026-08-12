@@ -103,9 +103,17 @@ def extract_audio(src: str | Path, job_dir: str | Path,
 def cut_fragment(src_wav: str | Path, out_wav: str | Path,
                  start: float, end: float,
                  sr: int | None = None, mono: bool = False) -> Path:
-    """Вырезает фрагмент [start, end) из wav."""
-    cmd = ["ffmpeg", "-y", "-i", str(src_wav),
-           "-ss", f"{max(0.0, start):.3f}", "-to", f"{max(start, end):.3f}"]
+    """Вырезает фрагмент [start, end) из wav.
+
+    -ss стоит ДО -i намеренно. При позиционировании после входа ffmpeg
+    декодирует дорожку от нуля до нужной секунды: на часовом wav каждая
+    нарезка перечитывает сотни мегабайт, а нарезок за задачу — тысячи.
+    Для PCM-wav вход перематывается точно, качество от этого не страдает.
+    """
+    start = max(0.0, start)
+    duration = max(0.0, end - start)
+    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src_wav),
+           "-t", f"{duration:.3f}"]
     if mono:
         cmd += ["-ac", "1"]
     if sr:
@@ -113,6 +121,15 @@ def cut_fragment(src_wav: str | Path, out_wav: str | Path,
     cmd += ["-c:a", "pcm_s16le", str(out_wav)]
     run(cmd, desc="ffmpeg cut")
     return Path(out_wav)
+
+
+def free_disk_gb(path: str | Path) -> float:
+    """Сколько гигабайт свободно на диске с этой папкой."""
+    import shutil as _shutil
+    path = Path(path)
+    while not path.exists() and path.parent != path:
+        path = path.parent
+    return _shutil.disk_usage(str(path)).free / 1e9
 
 
 def to_stereo_44k(src_wav: str | Path, out_wav: str | Path, sr: int = 44100) -> Path:

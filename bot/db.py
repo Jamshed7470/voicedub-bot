@@ -28,6 +28,14 @@ def _get_conn() -> sqlite3.Connection:
             _conn.execute("ALTER TABLE users ADD COLUMN style TEXT")
         except sqlite3.OperationalError:
             pass
+        try:  # миграция: режим голосов (clone | bank)
+            _conn.execute("ALTER TABLE users ADD COLUMN voice TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:  # миграция: подсказка о числе спикеров (auto | 2..8 | 10)
+            _conn.execute("ALTER TABLE users ADD COLUMN speakers TEXT")
+        except sqlite3.OperationalError:
+            pass
         _conn.commit()
     return _conn
 
@@ -39,21 +47,25 @@ def get_user(user_id: int) -> dict:
         "keep_background": bool(cfg.y("mix", "keep_background_default", default=True)),
         "keep_original": bool(cfg.y("mix", "keep_original_track_default", default=False)),
         "style": "normal",
+        "voice": "clone",
+        "speakers": "auto",
     }
     with _lock:
         row = _get_conn().execute(
-            "SELECT lang, keep_background, keep_original, style FROM users "
-            "WHERE user_id=?",
+            "SELECT lang, keep_background, keep_original, style, voice, speakers "
+            "FROM users WHERE user_id=?",
             (user_id,),
         ).fetchone()
     if not row:
         return defaults
-    lang, bg, orig, style = row
+    lang, bg, orig, style, voice, speakers = row
     return {
         "lang": lang,
         "keep_background": defaults["keep_background"] if bg is None else bool(bg),
         "keep_original": defaults["keep_original"] if orig is None else bool(orig),
         "style": style or "normal",
+        "voice": voice or "clone",
+        "speakers": speakers or "auto",
     }
 
 
@@ -63,16 +75,19 @@ def _upsert(user_id: int, **fields) -> None:
     with _lock:
         conn = _get_conn()
         conn.execute(
-            """INSERT INTO users (user_id, lang, keep_background, keep_original, style)
-               VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO users (user_id, lang, keep_background, keep_original,
+                                  style, voice, speakers)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
                    lang=excluded.lang,
                    keep_background=excluded.keep_background,
                    keep_original=excluded.keep_original,
-                   style=excluded.style""",
+                   style=excluded.style,
+                   voice=excluded.voice,
+                   speakers=excluded.speakers""",
             (user_id, current["lang"],
              int(current["keep_background"]), int(current["keep_original"]),
-             current["style"]),
+             current["style"], current["voice"], current["speakers"]),
         )
         conn.commit()
 
@@ -97,3 +112,13 @@ def toggle_style(user_id: int) -> str:
     new = "street" if get_user(user_id)["style"] == "normal" else "normal"
     _upsert(user_id, style=new)
     return new
+
+
+def toggle_voice(user_id: int) -> str:
+    new = "bank" if get_user(user_id)["voice"] == "clone" else "clone"
+    _upsert(user_id, voice=new)
+    return new
+
+
+def set_speakers(user_id: int, value: str) -> None:
+    _upsert(user_id, speakers=value)

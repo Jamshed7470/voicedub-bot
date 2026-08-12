@@ -6,6 +6,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from aiogram import Bot
 from aiogram.types import FSInputFile
@@ -162,14 +163,74 @@ class JobQueue:
             cleanup_job(job.id)
 
     async def _send_result(self, job: Job, result) -> None:
+        """Отправляет готовый дубляж. Что не влезло — остаётся в папке проекта.
+
+        Готовый файл уже лежит в «готовых видео» до всякой отправки: работа на
+        час-два не должна пропадать из-за лимита Telegram или обрыва связи.
+        """
         from core.config import TTS_LANGUAGES
         caption = texts.DONE_CAPTION.format(
             lang=TTS_LANGUAGES.get(result.tgt_lang, result.tgt_lang))
-        file = FSInputFile(str(result.output_path))
-        if result.kind == "video":
-            await self.bot.send_video(job.chat_id, file, caption=caption,
-                                      supports_streaming=True)
-        else:
-            await self.bot.send_audio(job.chat_id, file, caption=caption)
-        await self.bot.send_document(job.chat_id, FSInputFile(str(result.srt_path)),
-                                     caption=texts.SRT_CAPTION)
+
+        delivered = False
+        if result.output_path:
+            delivered = await self._send_file(job, result.output_path,
+                                              caption, result.kind)
+        elif result.parts:
+            delivered = await self._send_parts(job, result)
+
+        if delivered:
+            # в чат ушла сжатая версия — скажем, где лежит исходное качество
+            if result.saved_path and Path(result.saved_path) != Path(
+                    result.output_path or ""):
+                await self._say(job, texts.SAVED_COPY.format(
+                    path=result.saved_path))
+        elif result.saved_path:
+            size_mb = Path(result.saved_path).stat().st_size / 1024 / 1024
+            text = (texts.SAVED_LOCALLY.format(
+                size=f"{size_mb:.0f}", limit=f"{self.cfg.upload_limit_mb:.0f}",
+                path=result.saved_path)
+                if result.output_path is None
+                else texts.SEND_FAILED.format(path=result.saved_path))
+            await self._say(job, text)
+
+        try:
+            await self.bot.send_document(
+                job.chat_id, FSInputFile(str(result.srt_path)),
+                caption=texts.SRT_CAPTION)
+        except Exception:  # noqa: BLE001 — субтитры лежат рядом с видео в папке
+            log.exception("Не удалось отправить субтитры задачи %s", job.id)
+
+    async def _send_file(self, job: Job, path, caption: str, kind: str) -> bool:
+        file = FSInputFile(str(path))
+        try:
+            if kind == "video":
+                await self.bot.send_video(job.chat_id, file, caption=caption,
+                                          supports_streaming=True)
+            else:
+                await self.bot.send_audio(job.chat_id, file, caption=caption)
+            return True
+        except Exception:  # noqa: BLE001 — файл сохранён, сообщим путь
+            log.exception("Не удалось отправить результат задачи %s", job.id)
+            return False
+
+    async def _send_parts(self, job: Job, result) -> bool:
+        total = len(result.parts)
+        await self._say(job, texts.SPLIT_NOTICE.format(n=total))
+        sent = 0
+        for i, part in enumerate(result.parts, 1):
+            try:
+                await self.bot.send_video(
+                    job.chat_id, FSInputFile(str(part)),
+                    caption=texts.PART_CAPTION.format(i=i, n=total),
+                    supports_streaming=True)
+                sent += 1
+            except Exception:  # noqa: BLE001
+                log.exception("Не удалось отправить часть %d задачи %s", i, job.id)
+        return sent == total
+
+    async def _say(self, job: Job, text: str) -> None:
+        try:
+            await self.bot.send_message(job.chat_id, text)
+        except Exception:  # noqa: BLE001
+            log.exception("Не удалось отправить сообщение задачи %s", job.id)

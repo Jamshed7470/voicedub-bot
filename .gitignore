@@ -19,6 +19,17 @@ logs/
 # Веса моделей и кэши
 models/
 .cache/
+wav2vec2_checkpoints/
+
+# Готовые результаты дубляжа
+готовые видео/
+
+# Банк голосов: сами образцы (male_*/female_* .wav) — версионируем,
+# а исходные демо-нарезки дикторов (сотни МБ) — нет
+voice_db/мужской голос/
+voice_db/женские  голос/
+voice_db/детский голос/
+voice_db/.claude-flow/
 
 # IDE
 .idea/
@@ -27,3 +38,7 @@ models/
 # Служебные файлы инструментов
 .claude-flow/
 
+
+# локальный Bot API сервер
+telegram-api/data/
+telegram-api/.env

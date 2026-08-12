@@ -9,7 +9,8 @@ from aiogram.types import CallbackQuery, Message
 
 from bot import db, texts
 from bot.jobqueue import Job, JobQueue
-from bot.keyboards import lang_keyboard, settings_keyboard
+from bot.keyboards import (lang_keyboard, main_menu, settings_keyboard,
+                           speakers_keyboard)
 from bot.progress import ProgressReporter
 from core.config import TTS_LANGUAGES
 from core.downloader import find_url
@@ -23,12 +24,17 @@ router = Router()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    await message.answer(texts.START)
+    await message.answer(texts.START, reply_markup=main_menu())
+
+
+@router.message(Command("menu"))
+async def cmd_menu(message: Message) -> None:
+    await message.answer(texts.MENU_SHOWN, reply_markup=main_menu())
 
 
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
-    await message.answer(texts.HELP)
+    await message.answer(texts.HELP, reply_markup=main_menu())
 
 
 @router.message(Command("lang"))
@@ -36,14 +42,19 @@ async def cmd_lang(message: Message) -> None:
     await message.answer(texts.CHOOSE_LANG, reply_markup=lang_keyboard())
 
 
-@router.message(Command("settings"))
-async def cmd_settings(message: Message) -> None:
+async def _show_settings(message: Message) -> None:
     user = db.get_user(message.from_user.id)
     await message.answer(
         texts.SETTINGS_TITLE,
         reply_markup=settings_keyboard(user["keep_background"], user["keep_original"],
-                                       user["style"]),
+                                       user["style"], user["voice"],
+                                       user["speakers"]),
     )
+
+
+@router.message(Command("settings"))
+async def cmd_settings(message: Message) -> None:
+    await _show_settings(message)
 
 
 @router.message(Command("status"))
@@ -58,6 +69,64 @@ async def cmd_cancel(message: Message, jobqueue: JobQueue) -> None:
         await message.answer(texts.CANCEL_OK)
     else:
         await message.answer(texts.NO_ACTIVE_JOB)
+
+
+# ------------------------------------------------------- кнопки нижнего меню
+# Регистрируются ДО общего обработчика текста: иначе нажатие кнопки уедет
+# в разбор ссылки и вернётся «не понял, что это».
+
+@router.message(F.text == texts.BTN_LANG)
+async def btn_lang(message: Message) -> None:
+    await cmd_lang(message)
+
+
+@router.message(F.text == texts.BTN_SETTINGS)
+async def btn_settings(message: Message) -> None:
+    await _show_settings(message)
+
+
+@router.message(F.text == texts.BTN_HELP)
+async def btn_help(message: Message) -> None:
+    await message.answer(texts.HELP)
+
+
+@router.message(F.text == texts.BTN_STATUS)
+async def btn_status(message: Message, jobqueue: JobQueue) -> None:
+    await cmd_status(message, jobqueue)
+
+
+@router.message(F.text == texts.BTN_CANCEL)
+async def btn_cancel(message: Message, jobqueue: JobQueue) -> None:
+    await cmd_cancel(message, jobqueue)
+
+
+@router.message(F.text == texts.BTN_STYLE)
+async def btn_style(message: Message) -> None:
+    new = db.toggle_style(message.from_user.id)
+    await message.answer(texts.SETTINGS_STYLE_STREET if new == "street"
+                         else texts.SETTINGS_STYLE_NORMAL)
+
+
+@router.message(F.text == texts.BTN_VOICE)
+async def btn_voice(message: Message) -> None:
+    new = db.toggle_voice(message.from_user.id)
+    if new != "bank":
+        await message.answer(texts.SETTINGS_VOICE_CLONE)
+        return
+    from core import voicebank
+    count = voicebank.count()
+    if not count:
+        db.toggle_voice(message.from_user.id)  # откат: банк пуст
+        await message.answer(texts.VOICE_BANK_EMPTY)
+        return
+    await message.answer(f"{texts.SETTINGS_VOICE_BANK}\nВ банке голосов: {count}")
+
+
+@router.message(F.text == texts.BTN_SPEAKERS)
+async def btn_speakers(message: Message) -> None:
+    user = db.get_user(message.from_user.id)
+    await message.answer(texts.SPEAKERS_TITLE,
+                         reply_markup=speakers_keyboard(user["speakers"]))
 
 
 # ------------------------------------------------------------------ колбэки
@@ -78,7 +147,8 @@ async def _refresh_settings(query: CallbackQuery) -> None:
     await query.answer()
     await query.message.edit_reply_markup(
         reply_markup=settings_keyboard(user["keep_background"], user["keep_original"],
-                                       user["style"]))
+                                       user["style"], user["voice"],
+                                       user["speakers"]))
 
 
 @router.callback_query(F.data == "set:bg")
@@ -96,6 +166,41 @@ async def cb_toggle_orig(query: CallbackQuery) -> None:
 @router.callback_query(F.data == "set:style")
 async def cb_toggle_style(query: CallbackQuery) -> None:
     db.toggle_style(query.from_user.id)
+    await _refresh_settings(query)
+
+
+@router.callback_query(F.data == "set:speakers")
+async def cb_open_speakers(query: CallbackQuery) -> None:
+    user = db.get_user(query.from_user.id)
+    await query.answer()
+    await query.message.edit_text(
+        texts.SPEAKERS_TITLE,
+        reply_markup=speakers_keyboard(user["speakers"]))
+
+
+@router.callback_query(F.data.startswith("spk:"))
+async def cb_set_speakers(query: CallbackQuery) -> None:
+    value = query.data.split(":", 1)[1]
+    if value != "back":
+        db.set_speakers(query.from_user.id, value)
+    user = db.get_user(query.from_user.id)
+    await query.answer()
+    await query.message.edit_text(
+        texts.SETTINGS_TITLE,
+        reply_markup=settings_keyboard(user["keep_background"], user["keep_original"],
+                                       user["style"], user["voice"],
+                                       user["speakers"]))
+
+
+@router.callback_query(F.data == "set:voice")
+async def cb_toggle_voice(query: CallbackQuery) -> None:
+    new = db.toggle_voice(query.from_user.id)
+    if new == "bank":
+        from core import voicebank
+        if not voicebank.count():
+            db.toggle_voice(query.from_user.id)  # откат: банк пуст
+            await query.answer(texts.VOICE_BANK_EMPTY, show_alert=True)
+            return
     await _refresh_settings(query)
 
 
@@ -140,6 +245,8 @@ async def _enqueue(message: Message, jobqueue: JobQueue,
             "keep_background": user["keep_background"],
             "keep_original_track": user["keep_original"],
             "translation_style": user["style"],
+            "voice_mode": user["voice"],
+            "speakers": user["speakers"],
         },
     )
     reporter = ProgressReporter(message.bot, message.chat.id)

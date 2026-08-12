@@ -40,29 +40,40 @@ def detect_events(vocals16: np.ndarray, sr: int, cfg, progress=None) -> list[dic
 
     win = int(window * sr)
     hop_n = int(hop * sr)
-    total = max(1, len(vocals16) - win + 1)
+    batch_size = max(1, int(cfg.y("events", "batch_size", default=16)))
     hits: list[dict] = []
 
-    for off in range(0, max(1, len(vocals16) - int(0.3 * sr)), hop_n):
-        chunk = vocals16[off:off + win]
-        if len(chunk) < int(0.3 * sr):
-            break
+    offsets = [off for off in range(0, max(1, len(vocals16) - int(0.3 * sr)), hop_n)
+               if len(vocals16[off:off + win]) >= int(0.3 * sr)]
+    if not offsets:
+        return []
+
+    # окна идут пачками: на часовом ролике их тысячи, и накладные расходы
+    # одиночного вызова pipeline съедают больше времени, чем сама модель
+    for i in range(0, len(offsets), batch_size):
+        batch = offsets[i:i + batch_size]
+        inputs = [{"array": vocals16[off:off + win].astype(np.float32),
+                   "sampling_rate": sr} for off in batch]
         try:
-            preds = clf({"array": chunk.astype(np.float32), "sampling_rate": sr}, top_k=5)
+            results = clf(inputs, top_k=5, batch_size=len(inputs))
         except Exception:  # noqa: BLE001
-            log.exception("AST: ошибка на окне %.1fs", off / sr)
+            log.exception("AST: ошибка на окнах %.1f–%.1f c",
+                          batch[0] / sr, batch[-1] / sr)
             continue
-        for p in preds:
-            if p["label"] in wanted and float(p["score"]) >= threshold:
-                hits.append({
-                    "start": off / sr,
-                    "end": min(len(vocals16), off + win) / sr,
-                    "label": p["label"],
-                    "score": float(p["score"]),
-                })
-                break
+        if batch and isinstance(results, list) and results and isinstance(results[0], dict):
+            results = [results]  # одиночный вход pipeline отдаёт без обёртки
+        for off, preds in zip(batch, results):
+            for p in preds:
+                if p["label"] in wanted and float(p["score"]) >= threshold:
+                    hits.append({
+                        "start": off / sr,
+                        "end": min(len(vocals16), off + win) / sr,
+                        "label": p["label"],
+                        "score": float(p["score"]),
+                    })
+                    break
         if progress:
-            progress(min(100, int(100 * off / total)))
+            progress(min(100, int(100 * (i + len(batch)) / len(offsets))))
 
     # объединить пересекающиеся/соседние окна одного класса
     hits.sort(key=lambda h: h["start"])

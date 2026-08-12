@@ -28,38 +28,49 @@ def _get_classifier(cfg):
     return _classifier
 
 
+MAX_PIECE_S = 20.0   # длиннее модели не нужно: эмоция реплики слышна и по началу
+
+
 def classify_segments(vocals16_path: str | Path, segments: list[dict],
                       cfg, tmp_dir: str | Path, progress=None) -> None:
-    """Присваивает каждому сегменту seg["emotion"] и seg["emotion_conf"] (in-place)."""
-    from core.media import cut_fragment
+    """Присваивает каждому сегменту seg["emotion"] и seg["emotion_conf"] (in-place).
 
-    tmp_dir = Path(tmp_dir)
-    tmp_dir.mkdir(parents=True, exist_ok=True)
+    Фрагменты читаются прямо из wav по смещению. Раньше каждый сегмент
+    вырезался отдельным вызовом ffmpeg — на часовом ролике это тысячи
+    запусков процесса и столько же чтений дорожки с начала.
+    """
+    import soundfile as sf
+    import torch
+
     clf = _get_classifier(cfg)
-
     n = len(segments)
-    for i, seg in enumerate(segments):
-        seg["emotion"] = "neutral"
-        seg["emotion_conf"] = 0.0
-        if seg["end"] - seg["start"] < 0.5:
-            continue
-        piece = tmp_dir / f"emo_{seg['id']}.wav"
-        try:
-            cut_fragment(vocals16_path, piece, seg["start"], seg["end"],
-                         sr=16000, mono=True)
-            # ВАЖНО: classify_file ломает Windows-пути (fetch() съедает "\"
-            # после буквы диска) — грузим аудио сами и зовём classify_batch
-            import soundfile as sf
-            import torch
-            y, _sr = sf.read(str(piece), dtype="float32")
-            wav = torch.from_numpy(y).unsqueeze(0)
-            _, score, _, text_lab = clf.classify_batch(wav)
-            label = text_lab[0] if isinstance(text_lab, (list, tuple)) else str(text_lab)
-            seg["emotion"] = LABEL_MAP.get(label, "neutral")
-            seg["emotion_conf"] = round(float(score), 3)
-        except Exception:  # noqa: BLE001
-            log.exception("Эмоции: ошибка на сегменте %s", seg["id"])
-        finally:
-            piece.unlink(missing_ok=True)
-        if progress and n:
-            progress(int(100 * (i + 1) / n))
+
+    with sf.SoundFile(str(vocals16_path)) as f:
+        sr = f.samplerate
+        total = len(f)
+        for i, seg in enumerate(segments):
+            seg["emotion"] = "neutral"
+            seg["emotion_conf"] = 0.0
+            if seg["end"] - seg["start"] < 0.5:
+                continue
+            a = max(0, min(total, int(seg["start"] * sr)))
+            b = max(a, min(total, int(min(seg["end"], seg["start"] + MAX_PIECE_S) * sr)))
+            if b - a < int(0.5 * sr):
+                continue
+            try:
+                # ВАЖНО: classify_file ломает Windows-пути (fetch() съедает "\"
+                # после буквы диска) — грузим аудио сами и зовём classify_batch
+                f.seek(a)
+                y = f.read(b - a, dtype="float32", always_2d=False)
+                if y.ndim > 1:
+                    y = y.mean(axis=1)
+                wav = torch.from_numpy(y).unsqueeze(0)
+                _, score, _, text_lab = clf.classify_batch(wav)
+                label = (text_lab[0] if isinstance(text_lab, (list, tuple))
+                         else str(text_lab))
+                seg["emotion"] = LABEL_MAP.get(label, "neutral")
+                seg["emotion_conf"] = round(float(score), 3)
+            except Exception:  # noqa: BLE001
+                log.exception("Эмоции: ошибка на сегменте %s", seg["id"])
+            if progress and n:
+                progress(int(100 * (i + 1) / n))

@@ -17,14 +17,24 @@ def find_url(text: str) -> str | None:
     return m.group(0).rstrip(").,>») ") if m else None
 
 
+def _save_title(dest_dir: Path, title: str | None) -> None:
+    """Название ролика — им потом называется файл в папке готовых видео."""
+    if not title:
+        return
+    try:
+        (dest_dir / "title.txt").write_text(title.strip(), encoding="utf-8")
+    except OSError:
+        log.warning("Не удалось сохранить название ролика")
+
+
 async def download_from_telegram(bot, file_id: str, file_size: int | None,
                                  dest: Path, cfg) -> Path:
     """Скачивает файл из Telegram через Bot API.
 
     Без локального сервера Bot API лимит скачивания — 20 МБ.
     """
-    limit_mb = float(cfg.y("limits", "telegram_download_mb", default=20))
-    if not cfg.telegram_local_api_url and file_size and file_size > limit_mb * 1024 * 1024:
+    limit_mb = cfg.download_limit_mb
+    if file_size and file_size > limit_mb * 1024 * 1024:
         raise UserError(
             f"Файл больше {limit_mb:.0f} МБ — Telegram не даёт ботам скачивать такие файлы.\n"
             "Пришлите, пожалуйста, ссылку на видео (YouTube, TikTok, прямую ссылку и т.д.) — "
@@ -43,15 +53,32 @@ def download_url(url: str, dest_dir: Path, cfg) -> Path:
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     max_dur = cfg.max_duration_s
+    max_h = int(cfg.y("download", "max_height", default=1080))
 
     opts = {
-        "format": "bestvideo+bestaudio/best",
+        # выше max_h не берём: на двухчасовом ролике 4K — это десятки гигабайт
+        # и часы перекодировки, а дубляж от разрешения не выигрывает.
+        # h264 + m4a в приоритете: такой поток кладётся в mp4 копированием,
+        # играется везде и качается заметно быстрее, чем AV1 (его YouTube
+        # отдаёт медленнее всего)
+        "format": (
+            f"bestvideo[height<={max_h}][vcodec^=avc1]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={max_h}]+bestaudio/"
+            f"best[height<={max_h}]/bestvideo+bestaudio/best"
+        ),
+        "concurrent_fragment_downloads": 4,
         "merge_output_format": "mp4",
         "outtmpl": str(dest_dir / "input.%(ext)s"),
         "noplaylist": True,
         "quiet": True,
         "no_warnings": True,
-        "retries": 3,
+        # длинный ролик качается десятки минут, и за это время связь успевает
+        # моргнуть не раз: терять полгигабайта из-за одного сбоя DNS нельзя
+        "retries": 30,
+        "fragment_retries": 30,
+        "file_access_retries": 10,
+        "socket_timeout": 30,
+        "continuedl": True,
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -62,6 +89,7 @@ def download_url(url: str, dest_dir: Path, cfg) -> Path:
                     f"Видео слишком длинное: {duration / 60:.0f} мин. "
                     f"Лимит — {max_dur / 60:.0f} мин."
                 )
+            _save_title(dest_dir, info.get("title"))
             info = ydl.extract_info(url, download=True)
             path = Path(ydl.prepare_filename(info))
             # после merge расширение может отличаться

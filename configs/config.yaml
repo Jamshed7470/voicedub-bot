@@ -12,27 +12,54 @@ profiles:
 
 asr:
   batch_size: 8
-  compute_type_gpu: int8_float16
+  compute_type_gpu: auto        # auto: float16 при VRAM >= 7 ГБ (точнее), иначе int8_float16
   compute_type_cpu: int8
+  vad_onset: 0.35               # ниже — VAD охотнее считает тихий звук речью
+  vad_offset: 0.25
+  no_speech_threshold: 0.45     # выше — реплики в шуме отбрасываются как «тишина»
+  log_prob_threshold: -1.2      # ниже — реже выбрасываются «неуверенные» реплики
+  recover_missed: true          # второй проход по местам, где голос есть, а текста нет
+  recover_min_s: 0.8            # пропуски короче не дораспознаём
+  recover_max_regions: 25       # предел участков на ролик (защита от долгой обработки)
+  recover_min_logprob: -0.85    # строгая планка: выдуманная реплика хуже пропущенной
 
 limits:
-  max_duration_minutes: 60      # лимит длительности для ссылок и файлов
+  max_duration_minutes: 0       # 0 — без ограничения длительности (любое видео)
   telegram_download_mb: 20      # лимит Bot API на скачивание без локального сервера
   telegram_upload_mb: 50        # лимит Bot API на отправку файла ботом
+  telegram_download_local_mb: 1900   # с локальным сервером (TELEGRAM_LOCAL_API_URL)
+  telegram_upload_local_mb: 1900     # с локальным сервером: потолок Telegram — 2000 МБ
+  # запас места на диске: сколько МБ на секунду исходника нужно пайплайну
+  # (source+vocals+background+dubbed+analysis ≈ 0.77 МБ/с) плюс сами видеофайлы
+  disk_mb_per_second: 0.9
+  api_timeout_s: 1800           # таймаут запроса к Telegram (выгрузка 50 МБ не минутная)
+
+download:
+  max_height: 1080              # выше 1080p не качаем: длинный ролик занимает диск и время
 
 audio:
   analysis_sr: 16000            # analysis.wav — для всех моделей анализа
   source_sr: 44100              # source.wav — для separations и копирования фрагментов
   tts_sr: 24000                 # выход XTTS-v2
 
+separate:
+  chunk_minutes: 10             # длиннее — Demucs идёт кусками (иначе всё в память)
+  overlap_s: 4.0                # перекрытие кусков, склейка кроссфейдом
+
+tts:
+  cache_speaker_latents: true   # не пересчитывать отпечаток голоса на каждой реплике
+
 segments:
   min_duration_s: 1.0           # сегменты короче — склеивать с соседним того же спикера
   merge_gap_s: 0.3              # ...если пауза меньше этого значения
 
 timing:
-  atempo_max: 1.35              # максимальное ускорение синтеза
+  atempo_max: 1.20              # рабочее ускорение: выше речь теряет разборчивость
+  atempo_hard_max: 1.50         # крайний случай, когда реплика не влезает и после сокращения
   start_tolerance_ms: 50        # допуск на начало сегмента
-  speed_soft_max: 1.3           # мягкая подгонка параметром speed в XTTS
+  speed_soft_max: 1.15          # мягкая подгонка параметром speed в XTTS
+  max_extend_s: 1.5             # насколько реплика может зайти в паузу после себя
+  gap_guard_ms: 80              # зазор до начала следующей реплики
 
 speaker_ref:
   min_ref_s: 3.0                # референс короче — использовать пресет-голос по полу
@@ -42,8 +69,13 @@ speaker_ref:
 gender:
   model: alefiury/wav2vec2-large-xlsr-53-gender-recognition-librispeech
   min_segment_s: 1.5
+  # пол — характеристика спикера, а не ролика: хватает выборки его реплик.
+  # без этих границ час речи одного спикера уходит в pyin на десятки минут
+  max_probe_segments: 40
+  max_probe_s: 90
   f0_male_max_hz: 155
   f0_female_min_hz: 175
+  f0_child_min_hz: 260          # медианный F0 выше — помечаем спикера как детский (подбор детского голоса из банка)
   clf_confidence_threshold: 0.8
 
 emotions:
@@ -56,6 +88,7 @@ events:
   threshold: 0.5
   crossfade_ms: 50
   min_event_s: 0.3
+  batch_size: 16                # окон за один прогон модели (на часовом ролике их тысячи)
   # какие классы AudioSet копировать из оригинала
   classes:
     - Laughter
@@ -79,6 +112,9 @@ translation:
   temperature: 0.2
   window_segments: 80
   overlap_segments: 5
+  precompress: true                # укорачивать длинные реплики пачкой до синтеза
+  precompress_ratio: 1.15          # запас: сокращаем только явно не влезающие
+  precompress_batch: 30            # реплик в одном запросе на сокращение
   max_chars_ratio: 1.3          # перевод длиннее бюджета × ratio → запросить сжатый вариант
 
 # темп речи (символов в секунду) для расчёта бюджета длины перевода
@@ -105,13 +141,27 @@ mix:
   keep_background_default: true
   keep_original_track_default: false
   peak_dbfs: -1.0
+  block_s: 30                   # микс идёт блоками: час стерео 44.1к в памяти не держим
 
 output:
+  dir: "готовые видео"          # папка с результатами (внутри проекта)
   video_codec_copy: true
   audio_bitrate: 192k
-  compress_crf_start: 26
-  compress_crf_max: 34
-  compress_max_height: 720
+  compress_audio_kbps: 96       # звук при пережатии под лимит отправки
+  compress_preset: slow         # проход теперь один — можно кодировать качественнее
+  max_parts: 6                  # больше частей в чат не шлём — отдаём файл из папки
+  # разрешение подбирается по доступному битрейту (см. QUALITY_LADDER в mux.py);
+  # если ролик не влезает даже так — результат остаётся в папке готовых видео
 
 jobs:
   keep_days: 7                  # хранить логи и speakers.json N дней
+
+cache:
+  max_gb: 10                    # общий размер кэша анализа источников
+  keep_days: 14                 # хранить анализ ролика N дней с последнего использования
+  max_source_minutes: 30        # короче — кэшируем всегда; длиннее — если позволяет диск
+  keep_free_gb: 15              # столько места на диске остаётся свободным после кэша
+
+diarization:
+  max_speakers: 60              # верхняя граница в режиме «авто» (в банке 54 голоса; фильм даёт 20-30+ спикеров)
+  clustering_threshold: null    # ниже 0.7 — охотнее разделяет похожие голоса (null: как у pyannote)

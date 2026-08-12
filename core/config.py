@@ -48,6 +48,7 @@ class Config:
     anthropic_api_key: str = ""
     xai_api_key: str = ""
     telegram_local_api_url: str = ""
+    telegram_local_files_dir: str = ""  # где сервер складывает файлы (со стороны Windows)
     device: str = "cpu"
     profile: str = "full"
     yaml: dict[str, Any] = field(default_factory=dict)
@@ -82,8 +83,38 @@ class Config:
         return float(self.y("timing", "atempo_max", default=1.35))
 
     @property
+    def upload_limit_mb(self) -> float:
+        """Предел размера отправки: 50 МБ через облако, ~2 ГБ через свой сервер."""
+        if self.telegram_local_api_url:
+            return float(self.y("limits", "telegram_upload_local_mb", default=1900))
+        return float(self.y("limits", "telegram_upload_mb", default=50))
+
+    @property
+    def download_limit_mb(self) -> float:
+        """Предел скачивания файла из Telegram: 20 МБ через облако."""
+        if self.telegram_local_api_url:
+            return float(self.y("limits", "telegram_download_local_mb", default=1900))
+        return float(self.y("limits", "telegram_download_mb", default=20))
+
+    @property
     def max_duration_s(self) -> float:
-        return float(self.y("limits", "max_duration_minutes", default=60)) * 60
+        """0 или отрицательное в конфиге — ограничения на длительность нет."""
+        minutes = float(self.y("limits", "max_duration_minutes", default=0))
+        return minutes * 60 if minutes > 0 else float("inf")
+
+    @property
+    def cache_max_source_s(self) -> float:
+        """Дольше этого исходник не кладём в кэш медиа: там гигабайты wav."""
+        minutes = float(self.y("cache", "max_source_minutes", default=30))
+        return minutes * 60 if minutes > 0 else float("inf")
+
+    @property
+    def output_dir(self) -> Path:
+        """Папка готовых видео внутри проекта (создаётся при первом обращении)."""
+        name = str(self.y("output", "dir", default="готовые видео")).strip()
+        path = ROOT / (name or "готовые видео")
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def speech_rate(self, lang: str) -> float:
         rates = self.y("speech_rate_chars_per_s", default={}) or {}
@@ -130,6 +161,7 @@ def load_config() -> Config:
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
         xai_api_key=os.getenv("XAI_API_KEY", "").strip(),
         telegram_local_api_url=os.getenv("TELEGRAM_LOCAL_API_URL", "").strip(),
+        telegram_local_files_dir=os.getenv("TELEGRAM_LOCAL_FILES_DIR", "").strip(),
         device=_resolve_device(os.getenv("DEVICE", "auto")),
         profile=profile,
         yaml=yaml_cfg,

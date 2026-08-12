@@ -42,6 +42,34 @@ def _f0_median(y: np.ndarray, sr: int) -> float | None:
         return None
 
 
+def _probe_segments(segments: list[dict], cfg) -> list[dict]:
+    """Выборка реплик спикера для анализа пола.
+
+    Пол — свойство спикера, а не ролика: по часу его речи и по полутора
+    минутам ответ один и тот же. Считать pyin на каждой реплике длинного
+    видео нельзя — этап растягивается на десятки минут.
+    """
+    max_n = int(cfg.y("gender", "max_probe_segments", default=40))
+    max_s = float(cfg.y("gender", "max_probe_s", default=90))
+    if max_n <= 0 and max_s <= 0:
+        return segments
+
+    # самые длинные реплики: на них и F0, и классификатор устойчивее
+    ordered = sorted(segments, key=lambda s: s["end"] - s["start"], reverse=True)
+    picked, total = [], 0.0
+    for seg in ordered:
+        if max_n > 0 and len(picked) >= max_n:
+            break
+        if max_s > 0 and total >= max_s:
+            break
+        picked.append(seg)
+        total += seg["end"] - seg["start"]
+    if len(picked) < len(segments):
+        log.info("Пол спикера: беру %d из %d реплик (%.0f с)",
+                 len(picked), len(segments), total)
+    return picked or segments
+
+
 def detect_gender(vocals16: np.ndarray, sr: int, segments: list[dict], cfg) -> dict:
     """Определяет пол спикера по его сегментам.
 
@@ -54,6 +82,7 @@ def detect_gender(vocals16: np.ndarray, sr: int, segments: list[dict], cfg) -> d
     male_max = float(cfg.y("gender", "f0_male_max_hz", default=155))
     female_min = float(cfg.y("gender", "f0_female_min_hz", default=175))
     conf_thr = float(cfg.y("gender", "clf_confidence_threshold", default=0.8))
+    child_min = float(cfg.y("gender", "f0_child_min_hz", default=260))
 
     clf = _get_classifier(cfg)
 
@@ -61,7 +90,7 @@ def detect_gender(vocals16: np.ndarray, sr: int, segments: list[dict], cfg) -> d
     conf_sum = weight_sum = 0.0
     f0_values: list[tuple[float, float]] = []  # (f0, duration)
 
-    for seg in segments:
+    for seg in _probe_segments(segments, cfg):
         a, b = int(seg["start"] * sr), int(seg["end"] * sr)
         dur = (b - a) / sr
         if b <= a:
@@ -126,5 +155,10 @@ def detect_gender(vocals16: np.ndarray, sr: int, segments: list[dict], cfg) -> d
     else:
         gender, confidence = "male", 0.5  # совсем нет данных — нейтральный резерв
 
+    # Возраст: детский голос — очень высокий основной тон. По F0 взрослую
+    # женщину и ребёнка порой не различить (диапазоны пересекаются), поэтому
+    # это мягкая подсказка для подбора голоса из банка, а не жёсткий пол.
+    age = "child" if (f0_med is not None and f0_med >= child_min) else "adult"
+
     return {"gender": gender, "confidence": round(confidence, 3),
-            "f0_median": round(f0_med, 1) if f0_med else None}
+            "f0_median": round(f0_med, 1) if f0_med else None, "age": age}
