@@ -79,6 +79,15 @@ def download_url(url: str, dest_dir: Path, cfg) -> Path:
         "file_access_retries": 10,
         "socket_timeout": 30,
         "continuedl": True,
+        # обход троттлинга YouTube: у web-клиента n-sig режет скорость до
+        # десятков КиБ/с (8 часов на фильм). Мобильные/tv клиенты отдают поток
+        # без n-sig — берём формат у первого рабочего. Порядок = приоритет.
+        "extractor_args": {
+            "youtube": {"player_client": ["ios", "android", "tv", "web"]}
+        },
+        # если скорость всё же просела ниже порога — переполучить свежий URL
+        # (обычно уже без троттлинга), а не тянуть остаток часами
+        "throttledratelimit": 100 * 1024,
     }
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
