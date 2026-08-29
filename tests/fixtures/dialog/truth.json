@@ -1,0 +1,365 @@
+{
+ "name": "dialog",
+ "title": "диалог двух голосов с наложениями",
+ "duration_sec": 143.67,
+ "true_speakers": 2,
+ "voices": [
+  "male_konstantin_nikitin",
+  "female_darya_pavlova"
+ ],
+ "has_music": false,
+ "segments": [
+  {
+   "id": 1,
+   "start": 1.0,
+   "end": 5.085,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 2,
+   "start": 5.535,
+   "end": 8.266,
+   "speaker": "TRUE1",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 3,
+   "start": 8.716,
+   "end": 9.591,
+   "speaker": "TRUE0",
+   "text": "Хорошо.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 4,
+   "start": 10.041,
+   "end": 14.681,
+   "speaker": "TRUE1",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 5,
+   "start": 15.131,
+   "end": 19.259,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 6,
+   "start": 19.709,
+   "end": 22.077,
+   "speaker": "TRUE1",
+   "text": "Да, конечно.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 7,
+   "start": 21.327,
+   "end": 25.636,
+   "speaker": "TRUE0",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 8,
+   "start": 26.086,
+   "end": 29.009,
+   "speaker": "TRUE1",
+   "text": "Совсем нет.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 9,
+   "start": 29.459,
+   "end": 33.864,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 10,
+   "start": 34.314,
+   "end": 35.327,
+   "speaker": "TRUE1",
+   "text": "И как тебе?",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 11,
+   "start": 35.777,
+   "end": 38.7,
+   "speaker": "TRUE0",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 12,
+   "start": 39.15,
+   "end": 42.905,
+   "speaker": "TRUE1",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 13,
+   "start": 42.911,
+   "end": 44.02,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 14,
+   "start": 44.47,
+   "end": 48.364,
+   "speaker": "TRUE1",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 15,
+   "start": 48.814,
+   "end": 50.296,
+   "speaker": "TRUE0",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 16,
+   "start": 50.746,
+   "end": 54.042,
+   "speaker": "TRUE1",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 17,
+   "start": 54.492,
+   "end": 58.343,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 18,
+   "start": 58.793,
+   "end": 62.601,
+   "speaker": "TRUE1",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 19,
+   "start": 62.757,
+   "end": 63.493,
+   "speaker": "TRUE0",
+   "text": "Хорошо.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 20,
+   "start": 63.943,
+   "end": 69.233,
+   "speaker": "TRUE1",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 21,
+   "start": 69.683,
+   "end": 73.854,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 22,
+   "start": 74.304,
+   "end": 76.672,
+   "speaker": "TRUE1",
+   "text": "Да, конечно.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 23,
+   "start": 77.122,
+   "end": 80.781,
+   "speaker": "TRUE0",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 24,
+   "start": 81.231,
+   "end": 82.809,
+   "speaker": "TRUE1",
+   "text": "Совсем нет.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 25,
+   "start": 82.059,
+   "end": 85.953,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 26,
+   "start": 86.403,
+   "end": 87.469,
+   "speaker": "TRUE1",
+   "text": "И как тебе?",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 27,
+   "start": 87.919,
+   "end": 90.789,
+   "speaker": "TRUE0",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 28,
+   "start": 91.239,
+   "end": 94.855,
+   "speaker": "TRUE1",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 29,
+   "start": 95.305,
+   "end": 96.318,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 30,
+   "start": 96.768,
+   "end": 100.523,
+   "speaker": "TRUE1",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 31,
+   "start": 100.307,
+   "end": 101.971,
+   "speaker": "TRUE0",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 32,
+   "start": 102.421,
+   "end": 105.109,
+   "speaker": "TRUE1",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 33,
+   "start": 105.559,
+   "end": 109.452,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 34,
+   "start": 109.902,
+   "end": 112.825,
+   "speaker": "TRUE1",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 35,
+   "start": 113.275,
+   "end": 113.968,
+   "speaker": "TRUE0",
+   "text": "Хорошо.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 36,
+   "start": 114.418,
+   "end": 118.408,
+   "speaker": "TRUE1",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 37,
+   "start": 117.658,
+   "end": 121.647,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 38,
+   "start": 122.097,
+   "end": 123.761,
+   "speaker": "TRUE1",
+   "text": "Да, конечно.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 39,
+   "start": 124.211,
+   "end": 127.646,
+   "speaker": "TRUE0",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 40,
+   "start": 128.096,
+   "end": 129.994,
+   "speaker": "TRUE1",
+   "text": "Совсем нет.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 41,
+   "start": 130.444,
+   "end": 134.572,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 42,
+   "start": 135.022,
+   "end": 135.993,
+   "speaker": "TRUE1",
+   "text": "И как тебе?",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 43,
+   "start": 135.274,
+   "end": 138.197,
+   "speaker": "TRUE0",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 44,
+   "start": 138.647,
+   "end": 142.22,
+   "speaker": "TRUE1",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "female_darya_pavlova"
+  }
+ ]
+}

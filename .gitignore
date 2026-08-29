@@ -53,3 +53,7 @@ studio/frontend/dist/
 # Банк голосов: собирается локально скриптом build_voice_bank
 # (латенты XTTS весят десятки МБ и зависят от версии модели)
 voices/bank/
+
+# Фикстуры: генерируются скриптом make_fixtures (аудио весит десятки МБ),
+# в репозитории живёт только разметка truth.json
+tests/fixtures/*/audio*.wav

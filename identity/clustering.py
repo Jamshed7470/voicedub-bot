@@ -152,6 +152,79 @@ def merge_clusters(clusters: list[Cluster], segments: list[dict],
     return sorted(clusters, key=lambda c: c.first_sec)
 
 
+def absorb_stragglers(clusters: list[Cluster], segments: list[dict],
+                      embeddings: np.ndarray, min_speech_sec: float,
+                      min_sim: float, overlap_block_sec: float,
+                      floor: int = 1) -> list[Cluster]:
+    """Присоединяет крошечные кластеры к ближайшему настоящему спикеру.
+
+    Замер на фикстурах: при пороге слияния 0.55 все настоящие голоса
+    разделяются без единой ошибки, но остаются одиночные реплики, чей
+    шумный отпечаток не дотянул ни до кого. Дальше они становятся
+    полноценными «спикерами» — получают собственный профиль и собственный
+    голос из банка, хотя за ними стоит три секунды звука.
+
+    Снижать общий порог нельзя: на 0.45 уже склеиваются разные люди.
+    Поэтому обрывки разбираются отдельно и по мягкой планке.
+
+    Планка низкая осознанно. Реплика «Хорошо.» длиной секунду даёт
+    похожесть 0.35-0.43 даже к своему собственному спикеру — это предел
+    точности ECAPA на таком фрагменте, а не сомнение в человеке. Выбор
+    здесь между двумя ошибками: приписать секундную реплику соседу (её
+    озвучит чужой голос, и это видно в студии по флагу) или оставить
+    отдельным спикером (он получит собственный профиль и отдельный голос
+    из банка — в фильме появится персонаж ради одного слова). Второе
+    заметно хуже, поэтому обрывок присоединяется всегда, когда это
+    физически возможно, и всегда помечается.
+    """
+    if len(clusters) < 2:
+        return clusters
+
+    big = [c for c in clusters if c.speech_sec >= min_speech_sec]
+    small = [c for c in clusters if c.speech_sec < min_speech_sec]
+    if not big or not small:
+        return clusters
+
+    # если пользователь назвал точное число голосов, оно и есть ответ:
+    # поглощение обрывков не имеет права его менять
+    allowed = max(0, len(clusters) - max(floor, len(big)))
+    if allowed <= 0:
+        return clusters
+
+    moved = 0
+    for straggler in small:
+        if moved >= allowed:
+            break
+        cents = np.stack([c.centroid for c in big])
+        sims = cosine_matrix(np.atleast_2d(straggler.centroid), cents).ravel()
+        order = np.argsort(-sims)
+        for k in order:
+            if float(sims[k]) < min_sim:
+                break   # даже ближайший не похож — оставляем отдельным
+            host = big[int(k)]
+            simul = overlap_seconds(_spans(segments, straggler.seg_idx),
+                                    _spans(segments, host.seg_idx))
+            if simul >= overlap_block_sec:
+                continue          # говорят одновременно — это не он
+            host.seg_idx = sorted(host.seg_idx + straggler.seg_idx)
+            host.speech_sec += straggler.speech_sec
+            host.first_sec = min(host.first_sec, straggler.first_sec)
+            host.merged_from.append(straggler.label)
+            for idx in straggler.seg_idx:
+                segments[idx]["speaker"] = host.label
+                _add_flag(segments[idx], "low_speaker_conf")
+            vecs = embeddings[host.seg_idx]
+            host.centroid = centroid(vecs)
+            host.spread = spread(vecs, host.centroid)
+            straggler.seg_idx = []
+            moved += 1
+            break
+
+    if moved:
+        log.info("SIE: обрывков присоединено к ближайшему спикеру — %d", moved)
+    return sorted([c for c in clusters if c.seg_idx], key=lambda c: c.first_sec)
+
+
 def reliability(duration: float, short_sec: float, reliable_sec: float) -> float:
     """Насколько можно верить отпечатку сегмента такой длины: 0…1.
 
@@ -171,7 +244,9 @@ def reliability(duration: float, short_sec: float, reliable_sec: float) -> float
 def reassign(segments: list[dict], embeddings: np.ndarray,
              clusters: list[Cluster], min_sim: float, margin: float,
              rounds: int = 2, min_sim_short: float | None = None,
-             short_sec: float = 0.8, reliable_sec: float = 3.0) -> list[Cluster]:
+             short_sec: float = 0.8, reliable_sec: float = 3.0,
+             outlier_ratio: float = 0.75, flag_margin: float = 0.05,
+             absolute_floor: float = 0.25) -> list[Cluster]:
     """Каждый сегмент уходит к ближайшему центроиду — если запас достаточен.
 
     Сегмент, у которого два кандидата почти равны, НЕ перекидывается:
@@ -208,19 +283,31 @@ def reassign(segments: list[dict], embeddings: np.ndarray,
 
             rel = reliability(seg["end"] - seg["start"], short_sec, reliable_sec)
             bar = min_sim_short + (min_sim - min_sim_short) * rel
+            # планка соотносится с плотностью самого кластера: похожесть 0.45
+            # в рыхлом кластере (0.46) обычна, в плотном (0.80) — выброс
+            own = clusters[now].spread if now < len(clusters) else 0.0
+            bar = min(bar, own * outlier_ratio) if own > 0 else bar
+
+            # Перенести сегмент и пометить его — РАЗНЫЕ решения с разной ценой.
+            # Перенос требует уверенного перевеса. А пометка нужна там, где
+            # два кандидата почти равны: замер на фильме показал, что запас
+            # различает сомнительные привязки в пять раз лучше абсолютной
+            # похожести (медиана запаса 0.037 у самых непохожих реплик против
+            # 0.201 у остальных), и он же сам учитывает длину реплики
+            # (0.09 у секундных против 0.24 у трёхсекундных).
             confident = best_sim >= bar and gap >= margin
+            ambiguous = gap < flag_margin or best_sim < absolute_floor
             if confident:
                 buckets[label_of[best]].append(i)
                 seg["speaker"] = label_of[best]
                 seg["speaker_confidence"] = round(best_sim, 4)
             else:
-                # сегмент, у которого два кандидата почти равны, остаётся
-                # там, где был, и помечается — угадывать здесь хуже, чем
-                # признать неуверенность и показать её человеку.
-                # Флаг ставится независимо от того, совпал ли argmax с
-                # текущей меткой: ненадёжна сама привязка, а не только её смена
                 buckets[label_of[now]].append(i)
                 seg["speaker"] = label_of[now]
+
+            if ambiguous:
+                # флаг ставится независимо от того, менялась ли метка:
+                # ненадёжна сама привязка, а не только её смена
                 _add_flag(seg, "low_speaker_conf")
 
         for c in clusters:
@@ -312,6 +399,14 @@ def run(segments: list[dict], embeddings: np.ndarray, cfg,
     )
     log.info("SIE: после слияния — %d", len(clusters))
 
+    clusters = absorb_stragglers(
+        clusters, segments, embeddings,
+        min_speech_sec=float(c("straggler_max_speech_sec", 4.0)),
+        min_sim=float(c("straggler_min_sim", 0.25)),
+        overlap_block_sec=float(c("overlap_merge_block_sec", 2.0)),
+        floor=int(num_speakers or min_speakers or 1),
+    )
+
     clusters = reassign(
         segments, embeddings, clusters,
         min_sim=float(c("min_assign_sim", 0.55)),
@@ -320,6 +415,9 @@ def run(segments: list[dict], embeddings: np.ndarray, cfg,
         min_sim_short=float(c("min_assign_sim_short", 0.33)),
         short_sec=float(c("min_segment_sec_for_embedding", 0.8)),
         reliable_sec=float(c("reliable_segment_sec", 3.0)),
+        outlier_ratio=float(c("outlier_ratio", 0.75)),
+        flag_margin=float(c("flag_margin", 0.05)),
+        absolute_floor=float(c("absolute_floor", 0.25)),
     )
 
     isolated = mark_isolated(segments, float(c("isolated_max_sec", 1.5)),

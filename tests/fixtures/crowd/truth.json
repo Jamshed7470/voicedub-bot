@@ -1,0 +1,399 @@
+{
+ "name": "crowd",
+ "title": "четыре голоса под музыкой",
+ "duration_sec": 153.52,
+ "true_speakers": 4,
+ "voices": [
+  "male_konstantin_nikitin",
+  "female_darya_pavlova",
+  "male_oleg_sobolev",
+  "female_bovsunovskaya_evgeniya"
+ ],
+ "has_music": true,
+ "segments": [
+  {
+   "id": 1,
+   "start": 1.0,
+   "end": 5.085,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 2,
+   "start": 5.535,
+   "end": 8.266,
+   "speaker": "TRUE1",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 3,
+   "start": 8.716,
+   "end": 9.548,
+   "speaker": "TRUE2",
+   "text": "Хорошо.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 4,
+   "start": 9.998,
+   "end": 13.987,
+   "speaker": "TRUE3",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 5,
+   "start": 14.437,
+   "end": 18.565,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 6,
+   "start": 19.015,
+   "end": 21.383,
+   "speaker": "TRUE1",
+   "text": "Да, конечно.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 7,
+   "start": 20.633,
+   "end": 25.231,
+   "speaker": "TRUE2",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 8,
+   "start": 25.681,
+   "end": 26.694,
+   "speaker": "TRUE3",
+   "text": "Совсем нет.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 9,
+   "start": 27.144,
+   "end": 31.549,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 10,
+   "start": 31.999,
+   "end": 33.013,
+   "speaker": "TRUE1",
+   "text": "И как тебе?",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 11,
+   "start": 33.463,
+   "end": 36.428,
+   "speaker": "TRUE2",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 12,
+   "start": 36.878,
+   "end": 40.91,
+   "speaker": "TRUE3",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 13,
+   "start": 40.916,
+   "end": 42.026,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 14,
+   "start": 42.476,
+   "end": 46.369,
+   "speaker": "TRUE1",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 15,
+   "start": 46.819,
+   "end": 48.718,
+   "speaker": "TRUE2",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 16,
+   "start": 49.168,
+   "end": 51.578,
+   "speaker": "TRUE3",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 17,
+   "start": 52.028,
+   "end": 55.879,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 18,
+   "start": 56.329,
+   "end": 60.137,
+   "speaker": "TRUE1",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 19,
+   "start": 60.216,
+   "end": 61.144,
+   "speaker": "TRUE2",
+   "text": "Хорошо.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 20,
+   "start": 61.594,
+   "end": 65.167,
+   "speaker": "TRUE3",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 21,
+   "start": 65.617,
+   "end": 69.788,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 22,
+   "start": 70.238,
+   "end": 72.606,
+   "speaker": "TRUE1",
+   "text": "Да, конечно.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 23,
+   "start": 73.056,
+   "end": 77.504,
+   "speaker": "TRUE2",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 24,
+   "start": 77.954,
+   "end": 79.34,
+   "speaker": "TRUE3",
+   "text": "Совсем нет.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 25,
+   "start": 78.59,
+   "end": 82.484,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 26,
+   "start": 82.934,
+   "end": 84.0,
+   "speaker": "TRUE1",
+   "text": "И как тебе?",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 27,
+   "start": 84.45,
+   "end": 87.928,
+   "speaker": "TRUE2",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 28,
+   "start": 88.378,
+   "end": 91.951,
+   "speaker": "TRUE3",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 29,
+   "start": 92.401,
+   "end": 93.414,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 30,
+   "start": 93.864,
+   "end": 97.619,
+   "speaker": "TRUE1",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 31,
+   "start": 97.403,
+   "end": 99.067,
+   "speaker": "TRUE2",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 32,
+   "start": 99.517,
+   "end": 101.651,
+   "speaker": "TRUE3",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 33,
+   "start": 102.101,
+   "end": 105.994,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 34,
+   "start": 106.444,
+   "end": 109.367,
+   "speaker": "TRUE1",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 35,
+   "start": 109.817,
+   "end": 110.606,
+   "speaker": "TRUE2",
+   "text": "Хорошо.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 36,
+   "start": 111.056,
+   "end": 114.533,
+   "speaker": "TRUE3",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 37,
+   "start": 113.783,
+   "end": 117.773,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 38,
+   "start": 118.223,
+   "end": 119.887,
+   "speaker": "TRUE1",
+   "text": "Да, конечно.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 39,
+   "start": 120.337,
+   "end": 125.158,
+   "speaker": "TRUE2",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 40,
+   "start": 125.608,
+   "end": 126.952,
+   "speaker": "TRUE3",
+   "text": "Совсем нет.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 41,
+   "start": 127.402,
+   "end": 131.53,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 42,
+   "start": 131.98,
+   "end": 132.951,
+   "speaker": "TRUE1",
+   "text": "И как тебе?",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 43,
+   "start": 132.201,
+   "end": 135.358,
+   "speaker": "TRUE2",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 44,
+   "start": 135.808,
+   "end": 139.189,
+   "speaker": "TRUE3",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  },
+  {
+   "id": 45,
+   "start": 139.639,
+   "end": 140.791,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 46,
+   "start": 141.241,
+   "end": 145.604,
+   "speaker": "TRUE1",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "female_darya_pavlova"
+  },
+  {
+   "id": 47,
+   "start": 146.054,
+   "end": 149.115,
+   "speaker": "TRUE2",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_oleg_sobolev"
+  },
+  {
+   "id": 48,
+   "start": 149.565,
+   "end": 152.072,
+   "speaker": "TRUE3",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "female_bovsunovskaya_evgeniya"
+  }
+ ]
+}

@@ -1,0 +1,36 @@
+{
+ "monologue": {
+  "name": "monologue",
+  "title": "8 минут одного голоса",
+  "duration_sec": 194.48,
+  "true_speakers": 1,
+  "voices": [
+   "male_konstantin_nikitin"
+  ],
+  "has_music": false
+ },
+ "dialog": {
+  "name": "dialog",
+  "title": "диалог двух голосов с наложениями",
+  "duration_sec": 143.67,
+  "true_speakers": 2,
+  "voices": [
+   "male_konstantin_nikitin",
+   "female_darya_pavlova"
+  ],
+  "has_music": false
+ },
+ "crowd": {
+  "name": "crowd",
+  "title": "четыре голоса под музыкой",
+  "duration_sec": 153.52,
+  "true_speakers": 4,
+  "voices": [
+   "male_konstantin_nikitin",
+   "female_darya_pavlova",
+   "male_oleg_sobolev",
+   "female_bovsunovskaya_evgeniya"
+  ],
+  "has_music": true
+ }
+}

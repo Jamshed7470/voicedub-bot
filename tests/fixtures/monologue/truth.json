@@ -1,0 +1,492 @@
+{
+ "name": "monologue",
+ "title": "8 минут одного голоса",
+ "duration_sec": 194.48,
+ "true_speakers": 1,
+ "voices": [
+  "male_konstantin_nikitin"
+ ],
+ "has_music": false,
+ "segments": [
+  {
+   "id": 1,
+   "start": 1.0,
+   "end": 5.085,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 2,
+   "start": 5.535,
+   "end": 8.085,
+   "speaker": "TRUE0",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 3,
+   "start": 8.535,
+   "end": 9.409,
+   "speaker": "TRUE0",
+   "text": "Хорошо.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 4,
+   "start": 9.859,
+   "end": 13.571,
+   "speaker": "TRUE0",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 5,
+   "start": 14.021,
+   "end": 18.149,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 6,
+   "start": 18.599,
+   "end": 20.178,
+   "speaker": "TRUE0",
+   "text": "Да, конечно.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 7,
+   "start": 20.628,
+   "end": 24.937,
+   "speaker": "TRUE0",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 8,
+   "start": 25.387,
+   "end": 26.358,
+   "speaker": "TRUE0",
+   "text": "Совсем нет.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 9,
+   "start": 26.808,
+   "end": 31.213,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 10,
+   "start": 31.663,
+   "end": 32.815,
+   "speaker": "TRUE0",
+   "text": "И как тебе?",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 11,
+   "start": 33.265,
+   "end": 36.188,
+   "speaker": "TRUE0",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 12,
+   "start": 36.638,
+   "end": 40.393,
+   "speaker": "TRUE0",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 13,
+   "start": 40.843,
+   "end": 41.952,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 14,
+   "start": 42.402,
+   "end": 45.463,
+   "speaker": "TRUE0",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 15,
+   "start": 45.913,
+   "end": 47.396,
+   "speaker": "TRUE0",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 16,
+   "start": 47.846,
+   "end": 50.769,
+   "speaker": "TRUE0",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 17,
+   "start": 51.219,
+   "end": 55.069,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 18,
+   "start": 55.519,
+   "end": 59.274,
+   "speaker": "TRUE0",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 19,
+   "start": 59.724,
+   "end": 60.46,
+   "speaker": "TRUE0",
+   "text": "Хорошо.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 20,
+   "start": 60.91,
+   "end": 64.761,
+   "speaker": "TRUE0",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 21,
+   "start": 65.211,
+   "end": 69.381,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 22,
+   "start": 69.831,
+   "end": 71.122,
+   "speaker": "TRUE0",
+   "text": "Да, конечно.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 23,
+   "start": 71.572,
+   "end": 75.231,
+   "speaker": "TRUE0",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 24,
+   "start": 75.681,
+   "end": 76.971,
+   "speaker": "TRUE0",
+   "text": "Совсем нет.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 25,
+   "start": 77.421,
+   "end": 81.315,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 26,
+   "start": 81.765,
+   "end": 82.735,
+   "speaker": "TRUE0",
+   "text": "И как тебе?",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 27,
+   "start": 83.185,
+   "end": 86.055,
+   "speaker": "TRUE0",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 28,
+   "start": 86.505,
+   "end": 90.259,
+   "speaker": "TRUE0",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 29,
+   "start": 90.709,
+   "end": 91.723,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 30,
+   "start": 92.173,
+   "end": 97.09,
+   "speaker": "TRUE0",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 31,
+   "start": 97.54,
+   "end": 99.204,
+   "speaker": "TRUE0",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 32,
+   "start": 99.654,
+   "end": 101.926,
+   "speaker": "TRUE0",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 33,
+   "start": 102.376,
+   "end": 106.269,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 34,
+   "start": 106.719,
+   "end": 109.269,
+   "speaker": "TRUE0",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 35,
+   "start": 109.719,
+   "end": 110.412,
+   "speaker": "TRUE0",
+   "text": "Хорошо.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 36,
+   "start": 110.862,
+   "end": 115.171,
+   "speaker": "TRUE0",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 37,
+   "start": 115.621,
+   "end": 119.611,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 38,
+   "start": 120.061,
+   "end": 121.959,
+   "speaker": "TRUE0",
+   "text": "Да, конечно.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 39,
+   "start": 122.409,
+   "end": 125.844,
+   "speaker": "TRUE0",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 40,
+   "start": 126.294,
+   "end": 129.025,
+   "speaker": "TRUE0",
+   "text": "Совсем нет.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 41,
+   "start": 129.475,
+   "end": 133.603,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 42,
+   "start": 134.053,
+   "end": 135.162,
+   "speaker": "TRUE0",
+   "text": "И как тебе?",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 43,
+   "start": 135.612,
+   "end": 138.535,
+   "speaker": "TRUE0",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 44,
+   "start": 138.985,
+   "end": 142.601,
+   "speaker": "TRUE0",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 45,
+   "start": 143.051,
+   "end": 144.203,
+   "speaker": "TRUE0",
+   "text": "Не опаздывай.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 46,
+   "start": 144.653,
+   "end": 148.407,
+   "speaker": "TRUE0",
+   "text": "Постараюсь, но движение в это время бывает плотным.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 47,
+   "start": 148.857,
+   "end": 150.383,
+   "speaker": "TRUE0",
+   "text": "Тогда выезжай пораньше.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 48,
+   "start": 150.833,
+   "end": 153.798,
+   "speaker": "TRUE0",
+   "text": "Так и сделаю, спасибо за напоминание.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 49,
+   "start": 154.248,
+   "end": 158.195,
+   "speaker": "TRUE0",
+   "text": "Сегодня в городе тепло, и до вечера обещают ясную погоду.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 50,
+   "start": 158.645,
+   "end": 161.61,
+   "speaker": "TRUE0",
+   "text": "Я думаю, нам стоит обсудить это ещё раз.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 51,
+   "start": 162.06,
+   "end": 162.849,
+   "speaker": "TRUE0",
+   "text": "Хорошо.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 52,
+   "start": 163.299,
+   "end": 167.662,
+   "speaker": "TRUE0",
+   "text": "На улице много людей, работают кафе, ходят автобусы.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 53,
+   "start": 168.112,
+   "end": 172.336,
+   "speaker": "TRUE0",
+   "text": "Подожди минуту, я сейчас проверю расписание и перезвоню тебе.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 54,
+   "start": 172.786,
+   "end": 174.215,
+   "speaker": "TRUE0",
+   "text": "Да, конечно.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 55,
+   "start": 174.665,
+   "end": 177.769,
+   "speaker": "TRUE0",
+   "text": "Мне кажется, ты немного преувеличиваешь значение этой встречи.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 56,
+   "start": 178.219,
+   "end": 179.233,
+   "speaker": "TRUE0",
+   "text": "Совсем нет.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 57,
+   "start": 179.683,
+   "end": 183.992,
+   "speaker": "TRUE0",
+   "text": "Вчера я закончил читать книгу, которую ты советовал прошлым летом.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 58,
+   "start": 184.442,
+   "end": 185.509,
+   "speaker": "TRUE0",
+   "text": "И как тебе?",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 59,
+   "start": 185.959,
+   "end": 188.828,
+   "speaker": "TRUE0",
+   "text": "Очень понравилось, особенно вторая половина.",
+   "voice": "male_konstantin_nikitin"
+  },
+  {
+   "id": 60,
+   "start": 189.278,
+   "end": 193.033,
+   "speaker": "TRUE0",
+   "text": "Значит, договорились: встречаемся завтра в семь у входа.",
+   "voice": "male_konstantin_nikitin"
+  }
+ ]
+}
