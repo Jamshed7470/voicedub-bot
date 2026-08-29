@@ -147,3 +147,39 @@ def test_job_survives_cache_purge(tmp_path, monkeypatch):
     path = Path(profiles["S1"]["voice"]["profile_path"])
     assert path.exists()
     assert "cache" not in path.parts, "путь всё ещё смотрит в кэш"
+
+
+# ------------------------------------ что переживает очистку после успеха
+
+def test_cleanup_keeps_project_and_report(tmp_path, monkeypatch):
+    """Медиа уходят, а проект и карта голосов остаются.
+
+    Без project.json студия не откроет завершённую задачу и правки
+    человека пропадут; без report.md негде посмотреть, каким голосом кто
+    озвучен. Раньше очистка сносила и то, и другое.
+    """
+    from core import pipeline
+
+    jobs = tmp_path / "jobs"
+    job = jobs / "job1"
+    (job / "speakers" / "S1").mkdir(parents=True)
+    (job / "speakers" / "S1" / "voice_profile.pt").write_bytes(b"x")
+    for name in ("project.json", "report.md", "speakers.json",
+                 "transcript.json", "speaker_registry.json"):
+        (job / name).write_text("{}", encoding="utf-8")
+    # тяжёлое, что должно уйти
+    for name in ("source.wav", "vocals.wav", "dubbed.wav", "input.mp4"):
+        (job / name).write_bytes(b"0" * 1000)
+    (job / "synth").mkdir()
+    (job / "synth" / "seg_1.wav").write_bytes(b"0" * 1000)
+
+    monkeypatch.setattr(pipeline, "JOBS_DIR", jobs)
+    pipeline.cleanup_job("job1")
+
+    assert (job / "project.json").exists(), "проект удалён — студия его не откроет"
+    assert (job / "report.md").exists(), "карта голосов удалена"
+    assert (job / "speakers" / "S1" / "voice_profile.pt").exists(), \
+        "профили голосов удалены — переозвучка потребует полного пересчёта"
+
+    assert not (job / "source.wav").exists(), "тяжёлые дорожки остались"
+    assert not (job / "synth").exists(), "папка синтеза осталась"

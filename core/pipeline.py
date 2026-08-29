@@ -975,7 +975,15 @@ def _build_summary(src_lang: str, tgt_lang: str, profiles: dict,
 # Очистка временных файлов
 # ---------------------------------------------------------------------------
 
-KEEP_FILES = {"speakers.json", "transcript.json", "translated.json", "job.log"}
+# Что переживает очистку после успешной отправки. Медиа (гигабайты) уходят,
+# а лёгкие файлы остаются: без project.json студия не откроет завершённую
+# задачу и правки человека пропадут, без report.md негде посмотреть, каким
+# голосом кто озвучен. Сроки хранения задаёт project.store.purge.
+KEEP_FILES = {"speakers.json", "transcript.json", "translated.json", "job.log",
+              "project.json", "report.md", "speaker_registry.json"}
+# папки, которые тоже остаются: профили голосов нужны для переозвучки
+# отдельных реплик без пересчёта всего разбора
+KEEP_DIRS = {"speakers"}
 
 
 def cleanup_job(job_id: str) -> None:
@@ -998,7 +1006,7 @@ def cleanup_job(job_id: str) -> None:
         except Exception:  # noqa: BLE001 — кэш не должен ломать очистку
             log.exception("Кэш: не удалось сохранить артефакты задачи %s", job_id)
     for item in job_dir.iterdir():
-        if item.name in KEEP_FILES:
+        if item.name in KEEP_FILES or (item.is_dir() and item.name in KEEP_DIRS):
             continue
         try:
             if item.is_dir():
