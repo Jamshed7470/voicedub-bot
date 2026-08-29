@@ -67,7 +67,11 @@ def synth_xtts(segs: list[dict], profiles: dict, limits: dict, out_dir: Path,
     """Озвучка XTTS-v2. accelerate=True воспроизводит нынешнее поведение."""
     from core.normalize import normalize_for_tts
     from core.timing import STATUS_TOO_LONG, fit_to_slot
-    from core.tts import synthesize
+    from synth.xtts_engine import get_engine
+    from voices.profiles import load_profile
+
+    engine = get_engine(cfg)
+    loaded: dict[str, object] = {}
 
     if lively:
         _make_lively(cfg)
@@ -79,9 +83,13 @@ def synth_xtts(segs: list[dict], profiles: dict, limits: dict, out_dir: Path,
         raw = out_dir / f"seg_{seg['id']}_raw.wav"
         fitted = out_dir / f"seg_{seg['id']}.wav"
         text = normalize_for_tts(seg["text"], "ru")
-        speaker_wav = profiles.get(seg["speaker"], {}).get("ref_main")
+        spk = seg["speaker"]
+        if spk not in loaded:
+            voice = (profiles.get(spk) or {}).get("voice") or {}
+            loaded[spk] = load_profile(voice["profile_path"],
+                                       voice.get("identity_path"))
         try:
-            synthesize(text, "ru", raw, cfg, speaker_wav=speaker_wav, speed=1.0)
+            engine.synthesize(text, "ru", loaded[spk], raw, speed=1.0)
             if not accelerate:
                 raw.replace(fitted)
             else:
@@ -103,9 +111,9 @@ def synth_xtts(segs: list[dict], profiles: dict, limits: dict, out_dir: Path,
 
 def _make_lively(cfg) -> None:
     """Поднимает живость генерации XTTS: ровный монотон — половина «робота»."""
-    from core.tts import _get_tts
+    from synth.xtts_engine import get_engine
 
-    conf = _get_tts(cfg).synthesizer.tts_config
+    conf = get_engine(cfg).conf
     conf.temperature = 0.85          # было 0.75 — шире интонационный разброс
     conf.repetition_penalty = 2.5    # было 5.0 — меньше «сглаживания» просодии
     conf.top_k = 60

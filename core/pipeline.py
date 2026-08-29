@@ -220,10 +220,23 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
         from core.diarize import diarize_and_assign
         # по очищенному голосу: музыка и шум смазывают голосовые отпечатки,
         # и похожие спикеры слипаются в один кластер
-        segments = await asyncio.to_thread(diarize_and_assign, str(vocals16_wav),
-                                           asr_result, cfg, spk_hint)
+        segments, raw_turns = await asyncio.to_thread(
+            diarize_and_assign, str(vocals16_wav), asr_result, cfg, spk_hint,
+            True)
         if not segments:
             raise UserError("В этом файле не нашлось речи — нечего дублировать.")
+
+        # Speaker Identity Engine: сводит переразбитые кластеры в реальных
+        # людей. Без него один человек получал по несколько «спикеров», и
+        # каждому доставался свой голос — главная жалоба на версию 1.
+        await hooks.report(5, "свожу голоса спикеров", 60)
+        import identity as sie
+
+        sie_result = await asyncio.to_thread(
+            sie.analyze, vocals16_wav, segments, cfg, raw_turns, job_dir,
+            spk_hint)
+        speaker_summary = sie_result["speakers"]
+        log.info("Спикеров после сведения: %d", len(speaker_summary))
 
         # ---------- 6. Эмоции, события, профили спикеров ----------
         await report(6)
@@ -231,15 +244,27 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
         from core.emotions import classify_segments
         from core.events import detect_events, mark_event_segments
-        from core.speakers import build_profiles
 
         def _stage6() -> tuple[list[dict], dict]:
             import librosa
+
+            from identity.embeddings import get_embedder
+            from synth.xtts_engine import get_engine
+            from voices import profiles as prof_mod
+
             y16, _ = librosa.load(str(vocals16_wav), sr=16000, mono=True)
             events = detect_events(y16, 16000, cfg, report_ts(6))
             mark_event_segments(segments, events, cfg)
+            # эмоция нужна до сборки референса: выразительная речь в
+            # референс не идёт, иначе «истеричный» тембр закрепится за
+            # спикером на весь фильм
             classify_segments(vocals16_wav, segments, cfg, tmp_dir)
-            profiles = build_profiles(job_dir, vocals_wav, segments, cfg)
+            profiles = prof_mod.build_all(
+                job_dir, vocals_wav, vocals16_wav, segments, speaker_summary,
+                cfg, get_engine(cfg), get_embedder(cfg),
+                voice_mode=str(job.settings.get("voice_mode") or
+                               cfg.y("casting", "default_mode", default="auto")),
+                progress=report_ts(6))
             return events, profiles
 
         events, profiles = await asyncio.to_thread(_stage6)
@@ -283,24 +308,37 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
     # ---------- 9. Синтез + подгонка таймингов ----------
     await report(9)
-    bank_mode = job.settings.get("voice_mode") == "bank"
-    if bank_mode:
-        from core import voicebank
-        assigned = await asyncio.to_thread(voicebank.assign, profiles)
-        if assigned:
-            for spk, voice in assigned.items():
-                prof = profiles[spk]
-                prof["ref_main"] = voice["path"]
-                prof["refs_emotion"] = {}
-                prof["ref_ok"] = True
-                prof["bank_voice"] = voice["name"]
-        else:
-            log.warning("Режим банка голосов включён, но банк пуст — "
-                        "озвучиваю клонами оригинала")
-            bank_mode = False
-    placed = await asyncio.to_thread(
-        _synthesize_all, job_dir, tmp_dir, segments, profiles, vocals_wav,
-        translator, tgt_lang, cfg, report_ts(9), hooks, bank_mode)
+    from identity.embeddings import get_embedder
+    from synth import render as render_mod
+    from synth.xtts_engine import get_engine
+    from voices import casting
+
+    # кастинг: спикерам без клона (мало чистой речи) назначается голос банка,
+    # причём разным спикерам — разные голоса
+    bank = await asyncio.to_thread(casting.assign_voices, profiles, cfg)
+
+    # длинные реплики сокращаются пачкой ДО синтеза: поштучные запросы к
+    # переводчику из цикла на полуторачасовом фильме стоят часов
+    limits = render_mod.slot_limits(segments, cfg)
+    done_ids = render_mod.done_ids(job_dir / "synth")
+    pending = [s for s in segments
+               if not s.get("skip_tts") and s.get("text", "").strip()
+               and not render_mod.reusable(job_dir / "synth" / f"seg_{s['id']}.wav",
+                                           done_ids, s["id"])]
+    await asyncio.to_thread(_precompress, pending, limits, translator, tgt_lang,
+                            cfg, None)
+
+    def _stage9():
+        return render_mod.render_all(
+            job_dir, segments, profiles, cfg, get_engine(cfg),
+            get_embedder(cfg), tgt_lang, job.id, translator=translator,
+            bank=bank, progress=report_ts(9),
+            cancel_event=hooks.cancel_event)
+
+    placed, render_stats = await asyncio.to_thread(_stage9)
+    _save_json(job_dir / "speakers.json", profiles)
+    render_mod.write_report(job_dir, profiles, render_stats, src_lang, tgt_lang)
+    log.info("Стабильность голосов: %.2f", render_stats.overall_identity)
 
     # ---------- 10. Микс и сборка ----------
     await report(10)
@@ -366,163 +404,6 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
 
 # ---------------------------------------------------------------------------
-
-
-def _synthesize_all(job_dir: Path, tmp_dir: Path, segments: list[dict],
-                    profiles: dict, vocals_wav: Path, translator, tgt_lang: str,
-                    cfg, progress, hooks: PipelineHooks,
-                    bank_mode: bool = False) -> list[dict]:
-    """Синтез каждого сегмента + подгонка под слот (синхронно, в потоке)."""
-    from core.normalize import normalize_for_tts
-    from core.timing import STATUS_TOO_LONG, fit_to_slot
-    from core.translate import compute_max_chars
-    from core.tts import choose_style_ref, synthesize
-
-    synth_dir = job_dir / "synth"
-    synth_dir.mkdir(exist_ok=True)
-    atempo_max = cfg.atempo_max
-    atempo_hard_max = float(cfg.y("timing", "atempo_hard_max", default=1.5))
-    speed_soft_max = float(cfg.y("timing", "speed_soft_max", default=1.15))
-
-    to_do = [s for s in segments if not s.get("skip_tts") and s["text"].strip()]
-    placed: list[dict] = []
-    limits = _slot_limits(segments, cfg)
-    failed = 0
-    # доля реплик, которую ещё допустимо потерять: на длинном ролике их тысячи,
-    # и «одна не синтезировалась» незаметно превращается в выпавшие куски диалога
-    max_failed = max(3, int(len(to_do) * float(
-        cfg.y("timing", "max_failed_ratio", default=0.05))))
-
-    # сначала одним махом укорачиваем всё, что заведомо не влезает в слоты:
-    # поштучные запросы из цикла ниже на длинном ролике стоят часов.
-    # уже озвученные реплики не трогаем — их звук готов
-    done_ids = _synth_done_ids(synth_dir)
-    pending = [s for s in to_do
-               if not _reusable_synth(synth_dir / f"seg_{s['id']}.wav",
-                                      done_ids, s["id"])]
-    _precompress(pending, limits, translator, tgt_lang, cfg,
-                 (lambda p: progress(max(1, p // 34))) if progress else None)
-
-    # измеренный темп речи каждого голоса (символов в секунду при speed=1.0):
-    # табличный темп ошибается на конкретном голосе, а лишний прогон синтеза
-    # стоит секунд — на тысячах реплик это часы
-    rates: dict[str, list[float]] = {}
-
-    def _guess_speed(text: str, speaker: str, slot: float) -> float:
-        samples = rates.get(speaker)
-        if not samples:
-            return 1.0
-        rate = sorted(samples)[len(samples) // 2]
-        need = len(text) / max(1e-6, rate)
-        if need <= slot * atempo_max:
-            return 1.0
-        return min(speed_soft_max, need / (slot * atempo_max))
-
-    reused = 0
-    for i, seg in enumerate(to_do):
-        if hooks.cancel_event is not None and hooks.cancel_event.is_set():
-            raise JobCancelled()
-
-        # продолжение прерванной задачи: реплика уже озвучена — берём как есть.
-        # на длинном ролике это часы работы, которые незачем повторять
-        ready = synth_dir / f"seg_{seg['id']}.wav"
-        if _reusable_synth(ready, done_ids, seg["id"]):
-            placed.append({"start": seg["start"], "path": str(ready),
-                           "id": seg["id"]})
-            reused += 1
-            if progress:
-                progress(int(100 * (i + 1) / max(1, len(to_do))))
-            continue
-
-        # реплика может звучать в паузу после себя — это лучше, чем ускорять
-        # её до неразборчивости или выбрасывать слова
-        slot = max(0.4, limits.get(seg["id"], seg["end"]) - seg["start"])
-        profile = profiles.get(seg["speaker"], {})
-        if bank_mode:
-            # голос из банка: всегда его референс, без вырезок оригинала
-            speaker_wav, preset = profile.get("ref_main"), None
-        else:
-            speaker_wav, preset = choose_style_ref(seg, profile, vocals_wav,
-                                                   tmp_dir, cfg)
-
-        raw = synth_dir / f"seg_{seg['id']}_raw.wav"
-        fitted = synth_dir / f"seg_{seg['id']}.wav"
-
-        def _synth(text: str, speed: float = 1.0) -> None:
-            synthesize(text, tgt_lang, raw, cfg,
-                       speaker_wav=speaker_wav, preset=preset, speed=speed)
-
-        try:
-            # темп берём из уже измеренного для этого голоса: если реплика
-            # заведомо не влезает, синтезируем её ускоренной сразу, а не после
-            # лишнего прогона модели
-            speed = _guess_speed(seg["text"], seg["speaker"], slot)
-            _synth(seg["text"], speed=speed)
-            fit = fit_to_slot(raw, fitted, slot, atempo_max)
-            rates.setdefault(seg["speaker"], []).append(
-                len(seg["text"]) / max(0.1, fit.duration) * speed)
-            del rates[seg["speaker"]][:-20]  # помним последние два десятка
-
-            # мягкая подгонка параметром speed до применения atempo
-            if (fit.status == STATUS_TOO_LONG and speed < speed_soft_max
-                    and fit.tempo <= atempo_max * speed_soft_max):
-                speed = min(speed_soft_max, speed * fit.tempo)
-                _synth(seg["text"], speed=speed)
-                fit = fit_to_slot(raw, fitted, slot, atempo_max)
-
-            if fit.status == STATUS_TOO_LONG:
-                # бюджет из фактически измеренной длительности: реальный темп
-                # ЭТОГО голоса точнее табличных символов в секунду
-                rate = len(seg["text"]) / max(0.1, fit.duration)
-                max_chars = max(10, int(slot * rate))
-                max_chars = min(max_chars, compute_max_chars(seg, tgt_lang, cfg, slot))
-                compressed = translator.compress_segment(seg["text"], max_chars,
-                                                         tgt_lang)
-                compressed = normalize_for_tts(compressed, tgt_lang)
-                if compressed.strip() and compressed != seg["text"]:
-                    seg["text"] = compressed
-                    _synth(compressed, speed=speed_soft_max)
-                    fit = fit_to_slot(raw, fitted, slot, atempo_max)
-
-            if fit.status == STATUS_TOO_LONG:
-                # последний резерв: ускоряем, но не дальше порога разборчивости —
-                # лучше немного выйти за слот, чем произнести неразличимо
-                tempo = min(fit.tempo, atempo_hard_max)
-                log.warning("Сегмент %s: нужно ×%.2f, ускоряю до ×%.2f",
-                            seg["id"], fit.tempo, tempo)
-                from core.media import run as ffrun
-                ffrun(["ffmpeg", "-y", "-i", str(raw),
-                       "-filter:a", f"atempo={tempo:.6f}",
-                       "-c:a", "pcm_s16le", str(fitted)], desc="ffmpeg atempo max")
-
-            placed.append({"start": seg["start"], "path": str(fitted),
-                           "id": seg["id"]})
-            _mark_synth_done(synth_dir, seg["id"])
-        except AssertionError:
-            raise
-        except Exception:  # noqa: BLE001 — один сломанный сегмент не валит задачу
-            log.exception("Синтез сегмента %s не удался, пропускаю", seg["id"])
-            failed += 1
-            _free_vram()
-            if failed > max_failed:
-                # дальше нет смысла: скорее всего кончилась видеопамять или
-                # отвалилась модель, и мы соберём дубляж с дырами вместо речи
-                raise UserError(
-                    f"Синтез сорвался на {failed} репликах из {len(to_do)} — "
-                    "похоже, не хватает видеопамяти. Закройте другие задачи "
-                    "на видеокарте и пришлите ролик снова."
-                )
-        finally:
-            raw.unlink(missing_ok=True)
-
-        if progress:
-            progress(int(100 * (i + 1) / max(1, len(to_do))))
-
-    if reused:
-        log.info("Взято готовых реплик: %d из %d", reused, len(to_do))
-    if not placed:
-        raise UserError("Не удалось синтезировать ни одного сегмента речи.")
-    return placed
 
 
 def _check_disk(job_dir: Path, duration: float, input_path: Path, cfg) -> None:

@@ -27,13 +27,17 @@ def _speaker_bounds(hint: str, cfg) -> tuple[int | None, int | None, int | None]
 
 
 def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
-                       speakers_hint: str = "auto") -> list[dict]:
+                       speakers_hint: str = "auto",
+                       with_turns: bool = False):
     """Определяет спикеров и присваивает их сегментам/словам.
 
     Возвращает список сегментов:
-    [{id, start, end, text, speaker}] — speaker: стабильные S1, S2, ...
-    по порядку первого появления. Наложение речи поддерживается: у каждого
-    сегмента свои тайм-коды, при синтезе они микшируются каждый на своём месте.
+    [{id, start, end, text, speaker}] — speaker: СЫРЫЕ метки кластеров
+    pyannote. Сведение кластеров в реальных людей и выдача стабильных ID
+    S1, S2… — задача Speaker Identity Engine (пакет identity/).
+
+    with_turns=True — вернуть ещё и сырые интервалы диаризации
+    (start, end, speaker): по ним определяются наложения речи.
     """
     if not cfg.hf_token:
         raise UserError(
@@ -79,9 +83,12 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
 
     result = whisperx.assign_word_speakers(diarization, asr_result)
     segments = result.get("segments") or []
+    turns = _raw_turns(diarization)
 
-    # Стабильные ID: S1, S2, ... по порядку первого появления
-    mapping: dict[str, str] = {}
+    # Метки остаются сырыми (SPEAKER_00…): переименование в S1, S2…
+    # делает identity/registry.py — только он знает, какие кластеры
+    # на самом деле один человек
+    seen: set[str] = set()
     out: list[dict] = []
     last_speaker = None
     orphans = 0
@@ -95,13 +102,12 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
             raw = last_speaker or "SPEAKER_00"
             orphans += 1
         last_speaker = raw
-        if raw not in mapping:
-            mapping[raw] = f"S{len(mapping) + 1}"
+        seen.add(raw)
         out.append({
             "start": float(seg.get("start") or 0.0),
             "end": float(seg.get("end") or 0.0),
             "text": text,
-            "speaker": mapping[raw],
+            "speaker": raw,
         })
 
     out = merge_short_segments(
@@ -111,9 +117,28 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
     )
     for i, seg in enumerate(out, 1):
         seg["id"] = i
-    log.info("Диаризация: %d сегментов, %d спикеров%s", len(out), len(mapping),
+    log.info("Диаризация: %d сегментов, %d сырых кластеров%s", len(out), len(seen),
              f", без метки спикера: {orphans}" if orphans else "")
-    return out
+    return (out, turns) if with_turns else out
+
+
+def _raw_turns(diarization) -> list[dict]:
+    """Интервалы диаризации как есть — нужны для поиска наложений речи."""
+    turns: list[dict] = []
+    try:
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            turns.append({"start": float(turn.start), "end": float(turn.end),
+                          "speaker": str(speaker)})
+    except AttributeError:
+        # whisperx может отдать DataFrame вместо pyannote.Annotation
+        try:
+            for _, row in diarization.iterrows():
+                turns.append({"start": float(row["start"]), "end": float(row["end"]),
+                              "speaker": str(row["speaker"])})
+        except Exception:  # noqa: BLE001
+            log.warning("Не удалось прочитать интервалы диаризации — "
+                        "наложения речи не будут помечены")
+    return turns
 
 
 def merge_short_segments(segments: list[dict], min_dur: float = 1.0,
