@@ -107,6 +107,15 @@ async def amain() -> None:
     dp["jobqueue"] = queue
     dp.include_router(router)
 
+    # команды студии подключаются всегда: /review объяснит, как её включить,
+    # если STUDIO_ENABLED=false — молчащая команда хуже, чем подсказка
+    from bot.studio_commands import router as studio_router
+    dp.include_router(studio_router)
+    if cfg.studio_on:
+        log.info("Студия проверки включена: %s", cfg.studio_url)
+        if cfg.y("studio", "embedded", default=False):
+            _start_embedded_studio(cfg)
+
     # список команд в меню Telegram (кнопка «/» рядом с полем ввода)
     from aiogram.types import BotCommand
     try:
@@ -123,6 +132,21 @@ async def amain() -> None:
 
     log.info("VoiceDub Bot запущен. Ожидаю сообщения…")
     await dp.start_polling(bot)
+
+
+def _start_embedded_studio(cfg) -> None:
+    """Поднимает студию в процессе бота (STUDIO_EMBEDDED / studio.embedded)."""
+    import asyncio
+
+    import uvicorn
+
+    from studio.server import create_app
+
+    config = uvicorn.Config(create_app(), host=cfg.studio_host,
+                            port=cfg.studio_port, log_level="warning")
+    server = uvicorn.Server(config)
+    asyncio.get_event_loop().create_task(server.serve())
+    log.info("Студия поднята внутри бота на порту %s", cfg.studio_port)
 
 
 def main() -> None:

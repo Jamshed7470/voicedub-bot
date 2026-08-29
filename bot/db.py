@@ -47,7 +47,7 @@ def get_user(user_id: int) -> dict:
         "keep_background": bool(cfg.y("mix", "keep_background_default", default=True)),
         "keep_original": bool(cfg.y("mix", "keep_original_track_default", default=False)),
         "style": "normal",
-        "voice": "clone",
+        "voice": "auto",
         "speakers": "auto",
     }
     with _lock:
@@ -64,7 +64,7 @@ def get_user(user_id: int) -> dict:
         "keep_background": defaults["keep_background"] if bg is None else bool(bg),
         "keep_original": defaults["keep_original"] if orig is None else bool(orig),
         "style": style or "normal",
-        "voice": voice or "clone",
+        "voice": {"bank": "preset"}.get(voice, voice) or "auto",
         "speakers": speakers or "auto",
     }
 
@@ -114,8 +114,20 @@ def toggle_style(user_id: int) -> str:
     return new
 
 
+def set_voice_mode(user_id: int, mode: str) -> str:
+    """Режим голосов: clone | preset | auto (bank — старое имя preset)."""
+    mode = {"bank": "preset"}.get(mode, mode)
+    if mode not in ("clone", "preset", "auto"):
+        mode = "auto"
+    _upsert(user_id, voice=mode)
+    return mode
+
+
 def toggle_voice(user_id: int) -> str:
-    new = "bank" if get_user(user_id)["voice"] == "clone" else "clone"
+    """Кнопка в настройках перебирает режимы по кругу."""
+    order = ["auto", "clone", "preset"]
+    current = get_user(user_id)["voice"]
+    new = order[(order.index(current) + 1) % len(order)] if current in order else "auto"
     _upsert(user_id, voice=new)
     return new
 

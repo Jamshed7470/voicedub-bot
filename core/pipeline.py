@@ -305,6 +305,21 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
     from core.normalize import normalize_for_tts
     for seg in segments:
         seg["text"] = normalize_for_tts(seg["text"], tgt_lang)
+        seg["text_tts"] = seg["text"]
+
+    # ---------- 8.5. Точка проверки человеком ----------
+    # Рендер полутора тысяч реплик идёт часами: ошибку в назначении голосов
+    # дешевле поймать здесь, чем услышать в готовом фильме.
+    proj = await _open_review(job, bot, cfg, hooks, job_dir, segments, profiles,
+                              src_lang, tgt_lang,
+                              media={"video_path": str(input_path),
+                                     "vocals_path": str(vocals_wav),
+                                     "background_path": str(background_wav),
+                                     "duration_sec": float(info.duration),
+                                     "file_name": input_path.name,
+                                     "title": _read_title(job_dir, cached_media)})
+    if proj is not None:
+        segments, profiles = _apply_review(proj, segments, profiles)
 
     # ---------- 9. Синтез + подгонка таймингов ----------
     await report(9)
@@ -404,6 +419,95 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
 
 # ---------------------------------------------------------------------------
+
+
+async def _open_review(job, bot, cfg, hooks, job_dir: Path, segments: list[dict],
+                       profiles: dict, src_lang: str, tgt_lang: str,
+                       media: dict | None = None):
+    """Сохраняет project.json и, если нужно, ждёт утверждения человеком.
+
+    Возвращает проект с правками пользователя или None, если студия
+    выключена (INV-6: старый сценарий продолжает работать).
+    """
+    from project import store
+    from project.schema import Stage
+
+    auto_approve = bool(job.settings.get("auto_approve", False))
+    try:
+        proj = await asyncio.to_thread(
+            store.from_pipeline, job.id, segments, profiles, src_lang, tgt_lang,
+            {"voice_mode": job.settings.get("voice_mode", "auto"),
+             "auto_approve": auto_approve,
+             "keep_background": job.settings.get("keep_background", True),
+             "translation_style": job.settings.get("translation_style", "normal")},
+            media or {},
+            job.user_id, job.chat_id,
+            Stage.REVIEW if (cfg.studio_on and not auto_approve) else Stage.APPROVED,
+        )
+    except Exception:  # noqa: BLE001 — проект не должен ронять дубляж
+        log.exception("Не удалось сохранить project.json — иду без студии")
+        return None
+
+    if not cfg.studio_on:
+        return proj
+    if auto_approve:
+        log.info("auto_approve включён — проверка пропускается")
+        return proj
+
+    from bot.review import request_review, wait_for_approval
+
+    await hooks.report(8, "жду проверки в студии", 100)
+    await request_review(job, bot, cfg, proj)
+    log.info("Задача %s ждёт утверждения в студии", job.id)
+
+    approved = await wait_for_approval(job.id,
+                                       timeout_hours=cfg.studio_link_ttl_h)
+    if not approved:
+        raise UserError(
+            "Проверка так и не была подтверждена. Пришлите видео заново или "
+            "включите автоматический режим в настройках.")
+
+    return await asyncio.to_thread(store.load, job.id)
+
+
+def _apply_review(proj, segments: list[dict], profiles: dict) -> tuple[list[dict], dict]:
+    """Переносит правки из проекта обратно в структуры пайплайна.
+
+    Проект — источник правды после проверки: человек мог переназначить
+    спикеров, поправить перевод и сменить голоса, и рендер обязан
+    использовать именно это (INV-3).
+    """
+    by_id = {seg["id"]: seg for seg in segments}
+    for item in proj.segments:
+        seg = by_id.get(item.id)
+        if seg is None:
+            # реплика появилась при делении в студии
+            seg = {"id": item.id}
+            segments.append(seg)
+        seg["start"], seg["end"] = item.start, item.end
+        seg["speaker"] = item.speaker_id
+        seg["text"] = item.text_tts or item.text_tgt
+        seg["text_tts"] = seg["text"]
+        seg["flags"] = list(item.flags)
+        if item.voice_override:
+            seg["voice_override"] = item.voice_override.model_dump()
+    # удалённые склейкой реплики уходят и из пайплайна
+    alive = {item.id for item in proj.segments}
+    segments[:] = sorted((s for s in segments if s["id"] in alive),
+                         key=lambda s: s["start"])
+
+    for sp in proj.speakers:
+        entry = profiles.setdefault(sp.id, {"id": sp.id})
+        entry["gender"] = sp.gender
+        entry["label"] = sp.label
+        entry["name"] = sp.name
+        entry["voice"] = sp.voice.model_dump()
+        entry["reference"] = sp.reference.model_dump()
+        entry["ref_main"] = sp.reference.path
+        entry["ref_ok"] = sp.reference.clone_allowed
+        if sp.merged_into:
+            entry["merged_into"] = sp.merged_into
+    return segments, profiles
 
 
 def _check_disk(job_dir: Path, duration: float, input_path: Path, cfg) -> None:

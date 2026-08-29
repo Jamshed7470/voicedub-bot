@@ -49,3 +49,7 @@ telegram-api/.env
 # Frontend студии: исходники версионируем, зависимости — нет
 studio/frontend/node_modules/
 studio/frontend/dist/
+
+# Банк голосов: собирается локально скриптом build_voice_bank
+# (латенты XTTS весят десятки МБ и зависят от версии модели)
+voices/bank/
