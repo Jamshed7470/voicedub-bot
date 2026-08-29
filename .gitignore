@@ -16,6 +16,9 @@ data/
 logs/
 *.log
 
+# ВНИМАНИЕ: studio/static/ НЕ игнорируется намеренно — собранный
+# интерфейс коммитится, чтобы студия запускалась без Node (решение D-11)
+
 # Веса моделей и кэши
 models/
 .cache/
@@ -42,3 +45,7 @@ voice_db/.claude-flow/
 # локальный Bot API сервер
 telegram-api/data/
 telegram-api/.env
+
+# Frontend студии: исходники версионируем, зависимости — нет
+studio/frontend/node_modules/
+studio/frontend/dist/

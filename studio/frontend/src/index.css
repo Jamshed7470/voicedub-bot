@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Тёмная студийная тема: с таймлайном работают подолгу, светлый фон утомляет */
+:root { color-scheme: dark; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: #0d0f13;
+  color: #fff;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #14171d; }
+::-webkit-scrollbar-thumb { background: #333a48; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #454d5f; }
+
+/* строки таблицы позиционируются абсолютно — курсор текста тут мешает */
+select { cursor: pointer; }
