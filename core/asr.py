@@ -157,6 +157,72 @@ def _recover_missed_speech(model, audio, segments: list[dict], language: str,
     return recovered
 
 
+def _detect_language(model, audio, cfg) -> str:
+    """Определяет язык оригинала голосованием по всему ролику.
+
+    Штатный whisperx смотрит ТОЛЬКО первые 30 секунд. У фильмов и сериалов
+    там заставка, музыка или тишина — язык угадывается по шуму, и весь
+    дальнейший разбор идёт вхолостую: текст выходит фонетической кашей,
+    а ошибку видно только в конце, по бессмысленному дубляжу.
+    """
+    import numpy as np
+    from whisperx.audio import N_SAMPLES, SAMPLE_RATE, log_mel_spectrogram
+
+    forced = cfg.y("asr", "language", default=None)
+    if forced:
+        log.info("Язык оригинала задан в настройках: %s", forced)
+        return str(forced)
+
+    probes = int(cfg.y("asr", "lang_probes", default=12))
+    min_prob = float(cfg.y("asr", "lang_min_prob", default=0.5))
+    min_rms = float(cfg.y("asr", "lang_min_rms", default=0.005))
+
+    total = int(audio.shape[0])
+    if total <= N_SAMPLES:  # короткий файл — брать нечего, окно одно
+        return model.detect_language(audio)
+
+    n_mels = model.model.feat_kwargs.get("feature_size") or 80
+    # равномерно по всей длине, с отступом от краёв: начало — заставка,
+    # конец — титры, и то и другое речи обычно не содержит
+    last_start = total - N_SAMPLES
+    offsets = [int(last_start * (i + 0.5) / probes) for i in range(probes)]
+
+    scores: dict[str, float] = {}
+    votes: dict[str, int] = {}
+    checked = 0
+    for off in offsets:
+        window = audio[off:off + N_SAMPLES]
+        if float(np.sqrt(np.mean(window.astype(np.float64) ** 2))) < min_rms:
+            continue  # тишина: детектор вернёт случайный язык с низкой верой
+        try:
+            segment = log_mel_spectrogram(window, n_mels=n_mels, padding=0)
+            results = model.model.model.detect_language(model.model.encode(segment))
+            token, prob = results[0][0]
+        except Exception:  # noqa: BLE001 — одно окно не должно валить разбор
+            log.exception("Определение языка: окно на %.0fс не удалось",
+                          off / SAMPLE_RATE)
+            continue
+        checked += 1
+        if prob < min_prob:
+            continue
+        lang = token[2:-2]
+        scores[lang] = scores.get(lang, 0.0) + float(prob)
+        votes[lang] = votes.get(lang, 0) + 1
+
+    if not scores:
+        # ни одно окно не дало уверенного ответа — честнее откатиться
+        # на штатное поведение, чем молча выдумать язык
+        log.warning("Язык не определился по %d окнам — беру первые 30 с", checked)
+        return model.detect_language(audio)
+
+    best = max(scores, key=scores.get)
+    log.info("Язык оригинала: %s (%d из %d окон; распределение: %s)",
+             best, votes[best], checked,
+             ", ".join(f"{k}={v}" for k, v in sorted(votes.items(),
+                                                     key=lambda kv: -kv[1])))
+    return best
+
+
 def _prefetch_align_model(language: str, cfg) -> None:
     """Скачивает модель выравнивания устойчивым загрузчиком.
 
@@ -231,8 +297,12 @@ def transcribe(analysis_wav: str, cfg, progress=None) -> dict:
 
     if progress:
         progress(30)
-    result = model.transcribe(audio, batch_size=batch_size)
-    language = result.get("language")
+    # язык определяем сами и передаём явно: иначе whisperx возьмёт его из
+    # первых 30 секунд, где у фильмов заставка, и распознает весь ролик
+    # как чужой язык — молча, без единой ошибки в логе
+    language = _detect_language(model, audio, cfg)
+    result = model.transcribe(audio, batch_size=batch_size, language=language)
+    language = result.get("language") or language
     segments = result.get("segments") or []
     if not segments or not any((s.get("text") or "").strip() for s in segments):
         raise UserError(
@@ -274,8 +344,37 @@ def transcribe(analysis_wav: str, cfg, progress=None) -> dict:
         log.exception("Alignment не удался, использую тайминги Whisper как есть")
         result = {"language": language, "segments": segments}
 
+    result["segments"] = _drop_hallucinations(result.get("segments") or [])
+
     del model
     gc.collect()
     if device == "cuda":
         torch.cuda.empty_cache()
     return result
+
+
+def _drop_hallucinations(segments: list[dict]) -> list[dict]:
+    """Убирает штампы субтитров и реплики без единой буквы.
+
+    На заставке и под музыку Whisper уверенно выдаёт «Altyazı M.K.»,
+    «Subtitles by…», «... ... ...» — это артефакты обучающих данных, а не
+    речь. Второй проход такое отсекает, основной — нет, и штамп доезжает
+    до озвучки: голос посреди фильма произносит «Субтитры М. К.».
+    """
+    kept, dropped = [], 0
+    for s in segments:
+        t = (s.get("text") or "").strip()
+        # без букв и цифр реплики не бывает: это точки, тире и многоточия
+        if not t or not re.search(r"\w", t, re.UNICODE):
+            dropped += 1
+            continue
+        if HALLUCINATION_RE.search(t):
+            log.info("Распознавание: выброшен штамп субтитров на %.1fс — %r",
+                     s.get("start", 0.0), t[:60])
+            dropped += 1
+            continue
+        kept.append(s)
+    if dropped:
+        log.info("Распознавание: выброшено %d служебных реплик из %d",
+                 dropped, len(segments))
+    return kept

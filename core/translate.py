@@ -166,14 +166,40 @@ def fit_length_verified(call, text: str, target: int, tgt_lang: str,
     return best
 
 
+def grok_available(cfg) -> bool:
+    """Живой ли ключ xAI: один дешёвый запрос вместо тысячи мёртвых потом.
+
+    Кредиты команды кончаются молча, и узнавать об этом на середине ролика
+    (когда перевод уже не сделан, а реплики остались на языке оригинала) —
+    худший вариант. Проверяем один раз, до выбора переводчика.
+    """
+    if not cfg.xai_api_key or GrokTranslator._key_dead:
+        return False
+    try:
+        GrokTranslator(cfg)._call("Отвечай одним словом.", "Скажи: готов")
+        return True
+    except Exception as e:  # noqa: BLE001 — недоступность модели не должна ронять задачу
+        log.warning("xAI недоступен (%s) — перевожу без него", e)
+        return False
+
+
 def get_translator(cfg, style: str = "normal"):
     if style == "street":
-        if cfg.xai_api_key:
-            return GrokTranslator(cfg)
-        log.warning("Выбран уличный стиль, но XAI_API_KEY не задан — обычный перевод")
+        if grok_available(cfg):
+            return GrokTranslator(cfg, style="street")
+        log.warning("Выбран уличный стиль, но xAI недоступен — обычный перевод")
     if cfg.anthropic_api_key:
         return ClaudeTranslator(cfg)
-    log.info("ANTHROPIC_API_KEY не задан — использую локальный переводчик NLLB")
+    # NLLB переводит дословно и длинно: реплики не влезают в тайминг, и дубляж
+    # приходится ускорять до «автоответчика». Любая облачная модель лучше
+    if openrouter_available(cfg):
+        model = cfg.y("translation", "openrouter_model", default="?")
+        log.info("Перевожу через OpenRouter, модель %s", model)
+        return OpenRouterTranslator(cfg)
+    if grok_available(cfg):
+        log.info("ANTHROPIC_API_KEY не задан — перевожу через Grok (xAI)")
+        return GrokTranslator(cfg, style="normal")
+    log.info("Облачные модели недоступны — использую локальный переводчик NLLB")
     return NLLBTranslator(cfg)
 
 
@@ -229,7 +255,22 @@ class ClaudeTranslator:
         end = text.rfind("]")
         if start >= 0 and end > start:
             text = text[start:end + 1]
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            # одна незакрытая кавычка внутри реплики роняет разбор всего
+            # массива, а это окно целиком — 80 реплик остаются на языке
+            # оригинала. Разбираем объекты поштучно и теряем только битые
+            rows = []
+            for chunk in re.findall(r"\{[^{}]*\}", text, re.DOTALL):
+                try:
+                    rows.append(json.loads(chunk))
+                except json.JSONDecodeError:
+                    continue
+            if not rows:
+                raise
+            log.warning("Ответ модели — битый JSON, спасено записей: %d", len(rows))
+            return rows
 
     def translate_segments(self, segments: list[dict], src_lang: str,
                            tgt_lang: str, speakers: dict, progress=None) -> None:
@@ -336,6 +377,122 @@ class ClaudeTranslator:
 
 
 # ---------------------------------------------------------------------------
+# OpenRouter (бесплатные модели, OpenAI-совместимый API)
+# ---------------------------------------------------------------------------
+
+class OpenRouterTranslator:
+    """Перевод через OpenRouter. Окна, сжатие и разбор JSON — как у Claude.
+
+    Нужен, когда своих ключей Anthropic/xAI нет: даже бесплатная модель
+    переводит осмысленно, а NLLB даёт дословный подстрочник, который потом
+    приходится ускорять до «автоответчика».
+    """
+
+    API_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    # ключ отвергнут насовсем — не долбиться в него тысячу раз подряд
+    _key_dead = False
+
+    # всё, кроме самого запроса, у облачных переводчиков одинаково
+    _extract_json = staticmethod(ClaudeTranslator._extract_json)
+    translate_segments = ClaudeTranslator.translate_segments
+    compress_segment = ClaudeTranslator.compress_segment
+    compress_batch = ClaudeTranslator.compress_batch
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.model = cfg.y("translation", "openrouter_model",
+                           default="minimax/minimax-m3:free")
+        self.temperature = float(cfg.y("translation", "temperature", default=0.2))
+        self.tries = int(cfg.y("translation", "openrouter_retries", default=4))
+
+    def _call(self, system: str, user: str) -> str:
+        import requests
+        if OpenRouterTranslator._key_dead:
+            raise RuntimeError("ключ OpenRouter отвергнут ранее — запрос не отправляю")
+        last = "?"
+        for attempt in range(1, self.tries + 1):
+            try:
+                resp = requests.post(
+                    self.API_URL,
+                    headers={
+                        "Authorization": f"Bearer {self.cfg.openrouter_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "temperature": self.temperature,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                    },
+                    timeout=300,
+                )
+            except Exception as e:  # noqa: BLE001 — сеть моргнула, пробуем ещё
+                last = f"{type(e).__name__}: {e}"
+                time.sleep(min(30, 3 * attempt))
+                continue
+
+            # 401/402/403 бывают ДВУХ видов: отказ самого OpenRouter (ключ мёртв)
+            # и ретранслированный отказ апстрим-провайдера («нет баланса»
+            # у GMICloud и т.п.). Второй временный: на повторе маршрутизатор
+            # возьмёт другого провайдера. Гасить ключ здесь — потерять перевод
+            if resp.status_code in (401, 402, 403):
+                provider = ""
+                try:
+                    err = (resp.json().get("error") or {})
+                    provider = ((err.get("metadata") or {}).get("provider_name") or "")
+                except Exception:  # noqa: BLE001 — тело не разобралось, считаем своим
+                    provider = ""
+                if not provider:
+                    OpenRouterTranslator._key_dead = True
+                    raise RuntimeError(
+                        f"OpenRouter отклонил ключ: {resp.status_code} {resp.text[:200]}")
+                last = f"провайдер {provider} вернул HTTP {resp.status_code}"
+                log.warning("OpenRouter: %s — пробую ещё раз", last)
+                time.sleep(min(60, 5 * attempt))
+                continue
+            if resp.status_code == 429 or resp.status_code >= 500:
+                # бесплатный пул общий на всех: отказ временный, ждём дольше
+                last = f"HTTP {resp.status_code}"
+                time.sleep(min(60, 5 * attempt))
+                continue
+            resp.raise_for_status()
+
+            data = resp.json()
+            # бесплатные провайдеры отдают 200 с телом-ошибкой и без choices;
+            # прямое обращение к ['choices'] роняет задачу на ровном месте
+            choices = data.get("choices")
+            if not choices:
+                last = f"ответ без choices: {str(data)[:200]}"
+                time.sleep(min(30, 3 * attempt))
+                continue
+            return (choices[0].get("message", {}).get("content") or "").strip()
+
+        raise RuntimeError(
+            f"OpenRouter не ответил за {self.tries} попыток — последняя ошибка: {last}")
+
+
+def openrouter_available(cfg) -> bool:
+    """Живой ли ключ и отвечает ли выбранная модель — один дешёвый запрос.
+
+    Бесплатные модели на OpenRouter то и дело снимают с раздачи (404/403),
+    и узнать об этом на середине ролика — худший вариант.
+    """
+    if not cfg.openrouter_api_key or OpenRouterTranslator._key_dead:
+        return False
+    try:
+        t = OpenRouterTranslator(cfg)
+        t.tries = 2  # проверка не должна ждать минуту
+        t._call("Отвечай одним словом.", "Скажи: готов")
+        return True
+    except Exception as e:  # noqa: BLE001 — недоступность не должна ронять задачу
+        log.warning("OpenRouter недоступен (%s) — перевожу без него", e)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Локальный NLLB
 # ---------------------------------------------------------------------------
 
@@ -377,6 +534,12 @@ class NLLBTranslator:
         tok, model = self._tokenizer, self._model
         bos = tok.convert_tokens_to_ids(tgt_flores)
 
+        cfg = self.cfg
+        beams = int(cfg.y("translation", "nllb_beams", default=4))
+        length_penalty = float(cfg.y("translation", "nllb_length_penalty",
+                                     default=0.9))
+        margin = float(cfg.y("translation", "nllb_pick_margin", default=0.05))
+
         batch_size = 8
         for i in range(0, len(segments), batch_size):
             batch = segments[i:i + batch_size]
@@ -388,12 +551,30 @@ class NLLBTranslator:
             with torch.no_grad():
                 # без штрафов NLLB зацикливается: «и застрял… и застрял…»
                 # до сотен символов — такую реплику XTTS уже не осилит
-                out = model.generate(**inputs, forced_bos_token_id=bos,
-                                     max_length=512, num_beams=4,
+                res = model.generate(**inputs, forced_bos_token_id=bos,
+                                     max_length=512, num_beams=beams,
+                                     num_return_sequences=beams,
+                                     length_penalty=length_penalty,
                                      no_repeat_ngram_size=4,
-                                     repetition_penalty=1.15)
-            for s, ids in zip(batch, out):
-                text = tok.decode(ids, skip_special_tokens=True).strip()
+                                     repetition_penalty=1.15,
+                                     return_dict_in_generate=True,
+                                     output_scores=True)
+            # луч с лучшим счётом почти всегда самый многословный, а лишние
+            # символы потом отыгрываются ускорением темпа — то есть звучат
+            # как автоответчик. Из равных по качеству лучей берём короткий.
+            seqs = res.sequences.view(len(batch), beams, -1)
+            scores = res.sequences_scores.view(len(batch), beams)
+            for j, s in enumerate(batch):
+                cands = [tok.decode(seqs[j][b], skip_special_tokens=True).strip()
+                         for b in range(beams)]
+                best = float(scores[j][0])
+                # margin — в единицах нормированного log-prob на токен;
+                # шире порог = короче речь, но выше риск потерять оттенок
+                # при равной длине берём луч с ЛУЧШИМ счётом (меньший индекс),
+                # иначе выбор решается алфавитом и портит смысл
+                ok = [(len(c), b, c) for b, c in enumerate(cands)
+                      if c and float(scores[j][b]) >= best - margin]
+                text = min(ok)[2] if ok else cands[0]
                 s["text"] = collapse_repeats(text)
             if progress:
                 progress(min(100, int(100 * (i + len(batch)) / len(segments))))
@@ -406,7 +587,7 @@ class NLLBTranslator:
         Если есть ключ xAI, сокращаем осмысленно через Grok, иначе оставляем
         реплику целой: лучше слегка выйти в паузу, чем потерять смысл.
         """
-        if self._shortener is None:
+        if self._shortener is None or GrokTranslator._key_dead:
             return text
         return self._shortener.shorten_neutral(text, max_chars, tgt_lang)
 
@@ -433,19 +614,55 @@ STREET_SYSTEM_PROMPT = """Ты — переводчик дубляжа в ДЕР
    где переведено ТОЛЬКО поле text. Никакого текста вне JSON."""
 
 
+NORMAL_SYSTEM_PROMPT = """Ты — профессиональный переводчик для ДУБЛЯЖА видео.
+Переводи с языка «{src}» на язык «{tgt}».
+
+Правила:
+1. Это живая речь, а не подстрочник: пиши так, как люди говорят вслух —
+   естественный порядок слов, разговорные обороты, междометия на месте.
+   Сохраняй смысл, тон, регистр (ты/вы), юмор и эмоцию говорящего.
+2. Учитывай пол говорящего (поле gender) для форм глаголов и прилагательных.
+3. ВСЕ числа, даты, годы, проценты, суммы и единицы пиши СЛОВАМИ на целевом
+   языке в нужной форме: «9 мая» → «девятого мая», «5%» → «пять процентов».
+   В тексте не должно остаться ни одной цифры и символов %, №, $, €.
+4. КРИТИЧНО — длина: у каждого сегмента есть поле len_target (сколько символов
+   помещается в отведённое время). Перевод должен быть длиной от девяноста до
+   ста десяти процентов len_target: длиннее — дубляж придётся ускорять, и речь
+   зазвучит как автоответчик. Ради длины сокращай вводные слова и повторы,
+   но НЕ выбрасывай факты и не обрывай фразу.
+5. Ответ — СТРОГО тот же JSON-массив, что на входе, с теми же id,
+   где переведено ТОЛЬКО поле text. Никакого текста вне JSON."""
+
+
 class GrokTranslator:
-    """Перевод через xAI Grok API (OpenAI-совместимый chat/completions)."""
+    """Перевод через xAI Grok API (OpenAI-совместимый chat/completions).
+
+    style="street" — дерзкая уличная подача, style="normal" — обычный дубляж
+    (нужен, когда ключа Anthropic нет: Grok переводит живее локального NLLB).
+    """
 
     API_URL = "https://api.x.ai/v1/chat/completions"
 
-    def __init__(self, cfg):
+    # ключ отвергнут насовсем (кончились кредиты, отозван, лимит команды).
+    # признак общий на весь процесс: на часовом ролике сокращение реплик
+    # зовётся тысячи раз, и каждый мёртвый запрос — это 5–9 секунд ожидания
+    _key_dead = False
+
+    # сжатие пачкой и разбор JSON у облачных моделей устроены одинаково
+    _extract_json = staticmethod(ClaudeTranslator._extract_json)
+    compress_batch = ClaudeTranslator.compress_batch
+
+    def __init__(self, cfg, style: str = "street"):
         self.cfg = cfg
+        self.style = style
         self.model = cfg.y("translation", "xai_model", default="grok-4")
         self.len_min = float(cfg.y("translation", "street_len_min", default=0.9))
         self.len_max = float(cfg.y("translation", "street_len_max", default=1.1))
 
     def _call(self, system: str, user: str, temperature: float = 0.7) -> str:
         import requests
+        if GrokTranslator._key_dead:
+            raise RuntimeError("ключ xAI отвергнут ранее — запрос не отправляю")
         resp = requests.post(
             self.API_URL,
             headers={"Authorization": f"Bearer {self.cfg.xai_api_key}",
@@ -460,21 +677,31 @@ class GrokTranslator:
             },
             timeout=180,
         )
+        # 401/402/403 — не сетевая заминка, повторять бессмысленно
+        if resp.status_code in (401, 402, 403):
+            GrokTranslator._key_dead = True
+            log.error("xAI отвечает %d: %s. Дальше работаю без Grok — реплики "
+                      "не сокращаются, длинные укладываются ускорением темпа.",
+                      resp.status_code, resp.text[:200].strip())
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
     def _fit_length(self, text: str, len_target: int, tgt_lang: str) -> str:
         """Дожимает/растягивает реплику в коридор бюджета. Длину считает код."""
+        tone = ("Сохрани смысл и дерзкую уличную подачу."
+                if self.style == "street"
+                else "Сохрани смысл и естественную разговорную подачу.")
         return fit_length_verified(
             self._call, text, int(len_target * self.len_max), tgt_lang,
-            lo_ratio=self.len_min / self.len_max,
-            style="Сохрани смысл и дерзкую уличную подачу.")
+            lo_ratio=self.len_min / self.len_max, style=tone)
 
     def translate_segments(self, segments: list[dict], src_lang: str,
                            tgt_lang: str, speakers: dict, progress=None) -> None:
         window = int(self.cfg.y("translation", "window_segments", default=80))
         overlap = int(self.cfg.y("translation", "overlap_segments", default=5))
-        system = STREET_SYSTEM_PROMPT.format(
+        prompt = (STREET_SYSTEM_PROMPT if self.style == "street"
+                  else NORMAL_SYSTEM_PROMPT)
+        system = prompt.format(
             src=LANG_NAMES_RU.get(src_lang, src_lang),
             tgt=LANG_NAMES_RU.get(tgt_lang, tgt_lang),
         )

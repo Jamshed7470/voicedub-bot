@@ -1,6 +1,7 @@
 """Скачивание входных данных: файлы Telegram и ссылки (yt-dlp)."""
 from __future__ import annotations
 
+import functools
 import logging
 import re
 from pathlib import Path
@@ -47,6 +48,22 @@ async def download_from_telegram(bot, file_id: str, file_size: int | None,
     return dest
 
 
+@functools.lru_cache(maxsize=1)
+def _js_runtime() -> str | None:
+    """Первый доступный в системе JS-движок для yt-dlp.
+
+    Deno включён у yt-dlp по умолчанию, но его почти никогда нет; node и bun
+    стоят у большинства. Без движка ролик скачается в 360p и без ошибки.
+    """
+    import shutil
+    for name in ("deno", "node", "bun"):
+        if shutil.which(name):
+            return name
+    log.warning("JS-движок (node/deno/bun) не найден — YouTube отдаст только "
+                "360p. Установите Node.js, чтобы качать в 1080p")
+    return None
+
+
 def download_url(url: str, dest_dir: Path, cfg) -> Path:
     """Скачивает медиа по ссылке через yt-dlp (bestvideo+bestaudio, merge в mp4)."""
     import yt_dlp  # ленивый импорт
@@ -67,6 +84,12 @@ def download_url(url: str, dest_dir: Path, cfg) -> Path:
             f"best[height<={max_h}]/bestvideo+bestaudio/best"
         ),
         "concurrent_fragment_downloads": 4,
+        # без JS-движка yt-dlp не расшифровывает подписи YouTube и все DASH-
+        # форматы отдают 403. Остаётся единственный progressive-формат 18 —
+        # 640x360. Ролик при этом скачивается «успешно», и подмену качества
+        # видно только по ffprobe готового файла
+        # формат именно словарь {движок: {настройки}} — список yt-dlp отвергает
+        **({"js_runtimes": {_js_runtime(): {}}} if _js_runtime() else {}),
         "merge_output_format": "mp4",
         "outtmpl": str(dest_dir / "input.%(ext)s"),
         "noplaylist": True,
@@ -79,12 +102,14 @@ def download_url(url: str, dest_dir: Path, cfg) -> Path:
         "file_access_retries": 10,
         "socket_timeout": 30,
         "continuedl": True,
-        # обход троттлинга YouTube: у web-клиента n-sig режет скорость до
-        # десятков КиБ/с (8 часов на фильм). Мобильные/tv клиенты отдают поток
-        # без n-sig — берём формат у первого рабочего. Порядок = приоритет.
-        "extractor_args": {
-            "youtube": {"player_client": ["ios", "android", "tv", "web"]}
-        },
+        # ВАЖНО: не задавать player_client вручную. Раньше сюда ставили
+        # ios/android/tv против n-sig-троттлинга, но YouTube с тех пор урезал
+        # выдачу этим клиентам: они отдают «Only images are available» либо
+        # один progressive-формат 18 (640x360). Селектор молча скатывается на
+        # него, ролик качается «успешно» — и дубляж выходит в 360p при
+        # доступных 1080p. Замер: с этими клиентами формат 18 640x360,
+        # без них — 137+140 1920x1080. Список клиентов yt-dlp ведёт сам
+        # и правит при каждой поломке; троттлинг ловится throttledratelimit.
         # если скорость всё же просела ниже порога — переполучить свежий URL
         # (обычно уже без троттлинга), а не тянуть остаток часами
         "throttledratelimit": 100 * 1024,

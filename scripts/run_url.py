@@ -60,6 +60,13 @@ class ConsoleProgress:
 
 def setup_logging(job_name: str) -> None:
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    # консоль Windows по умолчанию cp1251: стрелка «→» и кавычки-ёлочки роняют
+    # обработчик логов (UnicodeEncodeError) и заваливают вывод трейсбеками
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

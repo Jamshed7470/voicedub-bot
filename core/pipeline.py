@@ -98,6 +98,7 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
                                            encoding="utf-8")
     cached_media = source_cache.media_dir(src_key)
     cached_analysis = source_cache.analysis_dir(src_key, spk_hint)
+    cached_analysis = _analysis_still_valid(cached_analysis, cfg)
 
     if cached_media:
         # ---------- 1–3 из кэша ----------
@@ -110,6 +111,13 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
         vocals_wav = cached_media / "vocals.wav"
         vocals16_wav = cached_media / "vocals16.wav"
         background_wav = cached_media / "background.wav"
+    elif (resumed := _resume_media(job_dir)) is not None:
+        # ---------- 1–3 из папки прерванной задачи ----------
+        await hooks.report(3, "беру видео и дорожки прерванной задачи", 100)
+        (input_path, analysis_wav, source_wav, vocals_wav,
+         vocals16_wav, background_wav) = resumed
+        info = media.probe(input_path)
+        log.info("Продолжаю задачу: медиа взяты из %s", job_dir)
     else:
         # ---------- 1. Скачивание ----------
         await report(1)
@@ -566,6 +574,29 @@ def _should_cache_media(duration: float, input_path: Path, cfg,
     return ok
 
 
+def _resume_media(job_dir: Path) -> tuple[Path, ...] | None:
+    """Медиа прерванной задачи, если они целы в её собственной папке.
+
+    Дорожки длинного ролика в общий кэш не переносятся (это гигабайты wav),
+    поэтому при продолжении брать их надо здесь. Иначе пайплайн заново качает
+    видео — а к тому времени ссылка может уже не открыться (регион, приватность),
+    и часы уже сделанной работы пропадают.
+    """
+    from core import cache as source_cache
+
+    inp = source_cache.input_file(job_dir)
+    if inp is None or not inp.is_file() or inp.stat().st_size < 1_000_000:
+        return None
+    # background.wav нужен миксу так же, как вокал: проверяем весь комплект
+    names = ["analysis.wav", "source.wav", "vocals.wav", "vocals16.wav",
+             "background.wav"]
+    tracks = [job_dir / n for n in names]
+    if not all(p.is_file() and p.stat().st_size > 1000 for p in tracks):
+        return None
+    analysis, source, vocals, vocals16, background = tracks
+    return inp, analysis, source, vocals, vocals16, background
+
+
 def _free_tracks(job_dir: Path, extra: list[Path]) -> None:
     """Удаляет несжатые дорожки задачи: после микса они больше не нужны.
 
@@ -707,6 +738,33 @@ def _mark_synth_done(synth_dir: Path, seg_id: int) -> None:
 def _reusable_synth(path: Path, done: set[int], seg_id: int) -> bool:
     """Готова ли реплика: есть в журнале и файл на месте."""
     return seg_id in done and path.exists() and path.stat().st_size > 1000
+
+
+def _analysis_still_valid(cached_analysis, cfg):
+    """Отбрасывает разбор, полученный при других настройках распознавания.
+
+    Кэш хранит готовый транскрипт и НЕ помнит, чем он сделан. Из-за этого
+    исправление распознавания молча не применяется: этап 4 просто не
+    вызывается, и задача берёт старый результат. Ошибка при этом выглядит
+    не как «кэш устарел», а как «исправление не работает» — ищется долго.
+    """
+    if cached_analysis is None:
+        return None
+    forced = cfg.y("asr", "language", default=None)
+    if not forced:
+        return cached_analysis
+    from core import cache as source_cache
+    try:
+        tr = source_cache.load_transcript(cached_analysis)
+    except Exception:  # noqa: BLE001 — нечитаемый кэш просто игнорируем
+        log.exception("Кэш разбора не читается — распознаю заново")
+        return None
+    got = (tr.get("language") or "").lower()
+    if got != str(forced).lower():
+        log.warning("Кэш разбора сделан на языке %r, а задан %r — "
+                    "распознаю заново", got, forced)
+        return None
+    return cached_analysis
 
 
 def _precompress(segments: list[dict], limits: dict[int, float], translator,

@@ -47,6 +47,7 @@ class Config:
     hf_token: str = ""
     anthropic_api_key: str = ""
     xai_api_key: str = ""
+    openrouter_api_key: str = ""
     telegram_local_api_url: str = ""
     telegram_local_files_dir: str = ""  # где сервер складывает файлы (со стороны Windows)
     device: str = "cpu"
@@ -160,6 +161,7 @@ def load_config() -> Config:
         hf_token=os.getenv("HF_TOKEN", "").strip(),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
         xai_api_key=os.getenv("XAI_API_KEY", "").strip(),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
         telegram_local_api_url=os.getenv("TELEGRAM_LOCAL_API_URL", "").strip(),
         telegram_local_files_dir=os.getenv("TELEGRAM_LOCAL_FILES_DIR", "").strip(),
         device=_resolve_device(os.getenv("DEVICE", "auto")),

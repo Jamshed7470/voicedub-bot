@@ -49,9 +49,17 @@ async def amain() -> None:
     if not cfg.hf_token:
         log.warning("HF_TOKEN не задан — определение спикеров работать НЕ будет. "
                     "См. README, раздел «Шаг 4. Токен HuggingFace».")
+    # порядок тот же, что в get_translator: иначе баннер обещает одно,
+    # а задача берёт другое — и это выглядит как поломка перевода
     if cfg.anthropic_api_key:
         log.info("Перевод: Claude API (%s)",
                  cfg.y("translation", "claude_model", default="claude-sonnet-4-6"))
+    elif cfg.openrouter_api_key:
+        log.info("Перевод: OpenRouter (%s), запасной — локальный NLLB",
+                 cfg.y("translation", "openrouter_model", default="?"))
+    elif cfg.xai_api_key:
+        log.info("Перевод: Grok xAI (%s), запасной — локальный NLLB",
+                 cfg.y("translation", "xai_model", default="grok-4"))
     else:
         log.info("Перевод: локальный NLLB (%s)", cfg.nllb_model)
 
