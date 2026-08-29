@@ -42,7 +42,16 @@ def source_key(kind: str, payload) -> str:
 
 
 def analysis_name(speakers_hint: str) -> str:
-    return f"analysis_{speakers_hint or 'auto'}"
+    """Имя папки с разбором. Содержит версию алгоритма спикеров.
+
+    Без версии старый разбор подхватывается после смены алгоритма, и
+    исправление молча не применяется к уже обработанным видео: этап
+    диаризации просто не вызывается. Симптом при этом выглядит как «фикс
+    не работает», а не как «кэш устарел», и ищется долго.
+    """
+    from identity import ALGO_VERSION
+
+    return f"analysis_{speakers_hint or 'auto'}_v{ALGO_VERSION}"
 
 
 def media_dir(key: str) -> Path | None:

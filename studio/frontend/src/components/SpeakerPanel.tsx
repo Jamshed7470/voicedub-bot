@@ -162,30 +162,41 @@ function SpeakerCard(props: {
         )}
       </div>
 
-      <div className="mt-2 flex items-center gap-1.5">
-        <span className="text-xs text-muted shrink-0">голос:</span>
-        <span className="text-xs truncate flex-1"
-              title={voiceLabel}>{voiceLabel}</span>
-        {sp.reference.path && (
+      {/* Выбор голоса — главное действие на карточке, поэтому это широкий
+          селектор с явной подписью, а не мелкая кнопка в ряду прочих:
+          раньше «Голос ▾» стояла рядом с ▶1 ▶2 ▶3 и читалась как ещё одна
+          кнопка проигрывания. */}
+      <div className="mt-2">
+        <span className="text-[11px] text-muted">Голос для озвучки</span>
+        <div className="mt-1 flex items-stretch gap-1">
           <button
-            title="Прослушать референс"
-            onClick={(e) => {
-              e.stopPropagation();
-              play(mediaUrl(`/speakers/${sp.id}/reference.wav`));
-            }}
-            className="w-6 h-6 rounded hover:bg-ink-600 text-accent shrink-0">▶</button>
-        )}
+            onClick={(e) => { e.stopPropagation(); props.onCasting(); }}
+            title="Выбрать голос: клон оригинала или голос из банка"
+            className="flex-1 min-w-0 flex items-center gap-1.5 px-2 py-1.5
+                       rounded border border-ink-500 bg-ink-800
+                       hover:border-accent hover:bg-ink-700 transition-colors">
+            <span className="flex-1 text-left text-xs truncate"
+                  title={voiceLabel}>{voiceLabel}</span>
+            <span className="text-muted text-[10px] shrink-0">выбрать ▾</span>
+          </button>
+          {sp.reference.path && (
+            <button
+              title="Прослушать голос, которым будет озвучен спикер"
+              onClick={(e) => {
+                e.stopPropagation();
+                play(mediaUrl(`/speakers/${sp.id}/reference.wav`));
+              }}
+              className="w-8 rounded border border-ink-500 bg-ink-800
+                         hover:border-accent text-accent shrink-0">▶</button>
+          )}
+        </div>
       </div>
 
-      <div className="mt-2 flex flex-wrap gap-1">
-        <button
-          onClick={(e) => { e.stopPropagation(); props.onCasting(); }}
-          className="text-xs px-2 py-1 rounded bg-ink-600 hover:bg-ink-500">
-          Голос ▾
-        </button>
+      <div className="mt-2 flex flex-wrap items-center gap-1">
+        <span className="text-[11px] text-muted mr-0.5">оригинал:</span>
         {sp.reference.best_samples.slice(0, 3).map((_, i) => (
           <button key={i}
-            title={`Образец ${i + 1} оригинального голоса`}
+            title={`Как этот человек звучит в оригинале — образец ${i + 1}`}
             onClick={(e) => {
               e.stopPropagation();
               play(mediaUrl(`/speakers/${sp.id}/samples/${i}.wav`));

@@ -287,6 +287,10 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
 
     # ---------- 7. Перевод ----------
     await report(7)
+    # оригинал сохраняется ДО перевода: перевод пишется в то же поле, и без
+    # этой строки в студии нечего сверять с видео — а ради сверки она и есть
+    for seg in segments:
+        seg.setdefault("text_src", seg.get("text", ""))
     style = job.settings.get("translation_style", "normal")
     from core.translate import get_translator
     translator = get_translator(cfg, style)
