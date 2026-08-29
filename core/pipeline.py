@@ -422,7 +422,16 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
                             render_stats, ProjectStage.DONE, str(saved_path))
 
     elapsed = time.monotonic() - t0
-    summary = _build_summary(src_lang, tgt_lang, profiles, elapsed)
+    try:
+        summary = _build_summary(src_lang, tgt_lang, profiles, elapsed)
+    except Exception:  # noqa: BLE001
+        # Видео уже собрано и лежит в папке готовых. Ошибка в ТЕКСТЕ
+        # сообщения не имеет права отменить работу, которая заняла минуты
+        # или часы: отдаём короткую сводку и продолжаем.
+        log.exception("Не удалось собрать подробную сводку")
+        mm, ss = divmod(int(elapsed), 60)
+        summary = (f"✅ Готово!\n\nСпикеров: {len(profiles)}\n"
+                   f"Время обработки: {mm:02d}:{ss:02d}")
     return JobResult(
         kind="video" if info.has_video else "audio",
         output_path=output_path,
@@ -521,8 +530,16 @@ def _apply_review(proj, segments: list[dict], profiles: dict) -> tuple[list[dict
                          key=lambda s: s["start"])
 
     for sp in proj.speakers:
-        entry = profiles.setdefault(sp.id, {"id": sp.id})
+        # спикер мог быть добавлен в студии вручную — тогда в profiles его
+        # ещё нет, и словарь надо создать со всеми полями, которые ждёт
+        # остальной код, а не с одним id
+        entry = profiles.setdefault(sp.id, {
+            "id": sp.id, "gender": "unknown", "gender_confidence": 0.0,
+            "age": "adult", "segments": 0, "speech_total_s": 0.0,
+            "ref_main": None, "ref_ok": False,
+        })
         entry["gender"] = sp.gender
+        entry.setdefault("gender_confidence", 0.0)
         entry["label"] = sp.label
         entry["name"] = sp.name
         entry["voice"] = sp.voice.model_dump()
@@ -884,15 +901,32 @@ def _save_json(path: Path, data: dict) -> None:
 
 def _build_summary(src_lang: str, tgt_lang: str, profiles: dict,
                    elapsed: float) -> str:
+    """Текст итогового сообщения.
+
+    Все поля читаются через .get(): словарь профиля собирается в трёх
+    местах (пайплайн, кэш, правки из студии), и любое из них может не
+    положить необязательное поле. Раньше отсутствие одного ключа роняло
+    задачу, у которой готовое видео уже лежало на диске.
+    """
     src_name = TTS_LANGUAGES.get(_norm_lang(src_lang), src_lang)
     tgt_name = TTS_LANGUAGES.get(tgt_lang, tgt_lang)
-    spk_lines = "\n".join(
-        f"  • {p['id']} — {GENDER_RU.get(p['gender'], p['gender'])}"
-        + (" (ребёнок)" if p.get("age") == "child" else "")
-        + f" (уверенность {p['gender_confidence']:.0%})"
-        + (f", голос: {p['bank_voice']}" if p.get("bank_voice") else "")
-        for p in profiles.values()
-    )
+
+    def line(p: dict) -> str:
+        gender = GENDER_RU.get(p.get("gender"), p.get("gender") or "?")
+        out = f"  • {p.get('id', '?')} — {gender}"
+        if p.get("age") == "child":
+            out += " (ребёнок)"
+        conf = p.get("gender_confidence")
+        if isinstance(conf, (int, float)) and conf:
+            out += f" (уверенность {conf:.0%})"
+        voice = p.get("bank_voice") or (p.get("voice") or {}).get("preset_name")
+        if voice:
+            out += f", голос: {voice}"
+        elif (p.get("voice") or {}).get("mode") == "clone":
+            out += ", голос: клон оригинала"
+        return out
+
+    spk_lines = "\n".join(line(p) for p in profiles.values())
     mm, ss = divmod(int(elapsed), 60)
     return (
         f"✅ Готово!\n\n"

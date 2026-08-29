@@ -254,3 +254,36 @@ def test_lan_url_replaces_localhost():
     alt = review.lan_url("http://localhost:8080")
     assert alt is None or (alt.startswith("http://") and "localhost" not in alt)
     assert review.lan_url("https://dub.example.com") is None
+
+
+# ------------------------------------------- сводка не роняет готовую работу
+
+def test_summary_survives_missing_fields():
+    """Словарь профиля собирается в трёх местах — поля может не быть.
+
+    Раньше отсутствие gender_confidence роняло задачу, у которой готовое
+    видео уже лежало на диске: исключение возникало ПОСЛЕ сохранения
+    файла, но ДО возврата результата, и очередь считала задачу упавшей.
+    """
+    from core.pipeline import _build_summary
+
+    # минимальный словарь — ровно такой пришёл из студии
+    text = _build_summary("en", "ru", {"S1": {"id": "S1", "gender": "male"}}, 125)
+    assert "Готово" in text and "S1" in text and "мужчина" in text
+
+    # совсем пустой словарь тоже не роняет
+    assert "Готово" in _build_summary("en", "ru", {"S9": {}}, 5)
+
+
+def test_summary_shows_voice_source():
+    """В сводке видно, каким голосом озвучен спикер."""
+    from core.pipeline import _build_summary
+
+    bank = _build_summary("en", "ru", {
+        "S1": {"id": "S1", "gender": "male", "gender_confidence": 0.91,
+               "bank_voice": "Никита"}}, 60)
+    assert "голос: Никита" in bank and "91%" in bank
+
+    clone = _build_summary("en", "ru", {
+        "S2": {"id": "S2", "gender": "female", "voice": {"mode": "clone"}}}, 60)
+    assert "клон оригинала" in clone
