@@ -6,6 +6,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { mediaUrl } from "../lib/api";
+import { stopAll } from "../lib/player";
 import { useProject, visibleSegments } from "../store/useProject";
 import type { Segment, Speaker } from "../lib/types";
 
@@ -38,8 +39,13 @@ export function Player() {
       setPlayhead(el.currentTime);
       if (loop && seg && el.currentTime >= seg.end) el.currentTime = seg.start;
     };
+    const onPlay = () => stopAll();   // видео и образец голоса разом — каша
     el.addEventListener("timeupdate", onTime);
-    return () => el.removeEventListener("timeupdate", onTime);
+    el.addEventListener("play", onPlay);
+    return () => {
+      el.removeEventListener("timeupdate", onTime);
+      el.removeEventListener("play", onPlay);
+    };
   }, [loop, seg, setPlayhead]);
 
   useEffect(() => {

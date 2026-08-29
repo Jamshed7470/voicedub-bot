@@ -3,7 +3,9 @@
 // Кастинг показывает не только назначенный голос, но и то, из чего система
 // выбирала: человеку нужно понимать, был ли выбор очевидным.
 
+import { useEffect, useState } from "react";
 import { mediaUrl } from "../lib/api";
+import { nowPlaying, onPlaybackChange, play } from "../lib/player";
 import { useProject } from "../store/useProject";
 import { FLAG_LABELS } from "../lib/types";
 
@@ -114,15 +116,18 @@ function VoiceRow({ id, name, score, speakerId, active }: {
   id: string; name: string; score?: number; speakerId: string; active: boolean;
 }) {
   const patchSpeaker = useProject((s) => s.patchSpeaker);
+  const [playingKey, setPlayingKey] = useState<string | null>(nowPlaying());
+  useEffect(() => onPlaybackChange(setPlayingKey), []);
+  const isPlaying = playingKey === `voice:${id}`;
   return (
     <div className={`flex items-center gap-1.5 px-2 py-1.5 rounded border text-sm
       ${active ? "border-accent bg-accent/10" : "border-line"}`}>
       <button
-        onClick={() => {
-          const a = new Audio(`/api/voices/${id}/sample.wav`);
-          void a.play().catch(() => undefined);
-        }}
-        className="w-6 h-6 rounded hover:bg-ink-600 text-accent shrink-0">▶</button>
+        onClick={() => play(`/api/voices/${id}/sample.wav`, `voice:${id}`)}
+        title={isPlaying ? "Остановить" : "Послушать голос"}
+        className={`w-6 h-6 rounded shrink-0 text-accent ${
+          isPlaying ? "bg-accent/25" : "hover:bg-ink-600"}`}>
+        {isPlaying ? "■" : "▶"}</button>
       <span className="flex-1 truncate" title={name}>{name}</span>
       {score !== undefined && (
         <span className="text-[10px] text-muted tabular-nums">

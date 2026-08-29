@@ -63,6 +63,18 @@ def undo(proj: Project) -> str | None:
         for seg_id in before.get("segments_added", []) or []:
             proj.segments = [s for s in proj.segments if s.id != seg_id]
             restored = True
+        # удалённый спикер возвращается целиком, иначе его реплики повиснут
+        # без владельца и рендер остановится
+        for raw in before.get("speakers_removed", []) or []:
+            sid = raw if isinstance(raw, str) else raw.get("id")
+            snapshot = next((x for x in (before.get("speakers") or [])
+                             if x.get("id") == sid), None)
+            if snapshot and not any(s.id == sid for s in proj.speakers):
+                proj.speakers.append(Speaker.model_validate(snapshot))
+                restored = True
+        for sid in before.get("speakers_added", []) or []:
+            proj.speakers = [s for s in proj.speakers if s.id != sid]
+            restored = True
 
         if restored:
             proj.segments.sort(key=lambda s: (s.start, s.id))

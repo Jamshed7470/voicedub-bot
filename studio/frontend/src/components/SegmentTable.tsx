@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { mediaUrl } from "../lib/api";
+import { nowPlaying, onPlaybackChange, play as playAudio } from "../lib/player";
 import { useProject, visibleSegments } from "../store/useProject";
 import { FLAG_LABELS } from "../lib/types";
 import type { Segment, Speaker } from "../lib/types";
@@ -173,6 +174,7 @@ function Row({ seg, speaker, top, active, checked, speakers, onSelect }: {
   const previewing = useProject((s) => s.previewing.has(seg.id));
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(seg.text_tgt);
+  const playing = usePlayingKey();
 
   useEffect(() => setText(seg.text_tgt), [seg.text_tgt]);
 
@@ -260,15 +262,22 @@ function Row({ seg, speaker, top, active, checked, speakers, onSelect }: {
       <span className="w-16 flex items-center gap-1 justify-center"
             onClick={(e) => e.stopPropagation()}>
         <button title="Оригинал"
-                onClick={() => playUrl(mediaUrl(`/segments/${seg.id}/original.wav`))}
-                className="w-6 h-6 rounded hover:bg-ink-600 text-muted">▶</button>
-        <button title="Синтез"
+                onClick={() => playAudio(
+                  mediaUrl(`/segments/${seg.id}/original.wav`),
+                  `orig:${seg.id}`)}
+                className={`w-6 h-6 rounded hover:bg-ink-600 ${
+                  playing === `orig:${seg.id}` ? "bg-ink-500 text-white" : "text-muted"}`}>
+          {playing === `orig:${seg.id}` ? "■" : "▶"}
+        </button>
+        <button title="Озвучка"
                 onClick={() => {
                   if (seg.synth.status === "pending") void preview(seg.id);
-                  else playUrl(mediaUrl(`/segments/${seg.id}/synth.wav`));
+                  else playAudio(mediaUrl(`/segments/${seg.id}/synth.wav`),
+                                 `synth:${seg.id}`);
                 }}
-                className="w-6 h-6 rounded hover:bg-ink-600 text-accent">
-          {previewing ? "…" : "▶"}
+                className={`w-6 h-6 rounded hover:bg-ink-600 text-accent ${
+                  playing === `synth:${seg.id}` ? "bg-accent/25" : ""}`}>
+          {previewing ? "…" : playing === `synth:${seg.id}` ? "■" : "▶"}
         </button>
       </span>
     </div>
@@ -291,9 +300,10 @@ function Chip({ children, active, disabled, tone, onClick }: {
   );
 }
 
-function playUrl(url: string): void {
-  const audio = new Audio(url);
-  void audio.play().catch(() => undefined);
+function usePlayingKey(): string | null {
+  const [key, setKey] = useState<string | null>(nowPlaying());
+  useEffect(() => onPlaybackChange(setKey), []);
+  return key;
 }
 
 function fmt(sec: number): string {

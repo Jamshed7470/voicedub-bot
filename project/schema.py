@@ -28,6 +28,21 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def free_color(used: list[str] | set[str]) -> str:
+    """Первый цвет палитры, который ещё никем не занят.
+
+    Выбирать цвет по счётчику спикеров нельзя: после удалений и добавлений
+    счётчик совпадёт с чужим индексом, и два человека станут одного цвета —
+    а на таймлайне их только по цвету и различают.
+    """
+    taken = set(used)
+    for i in range(len(PALETTE) * 8):
+        color = color_for(i)
+        if color not in taken:
+            return color
+    return color_for(len(taken))
+
+
 def color_for(index: int) -> str:
     """Больше 12 спикеров — палитра циклится с затемнением оттенка."""
     base = PALETTE[index % len(PALETTE)]

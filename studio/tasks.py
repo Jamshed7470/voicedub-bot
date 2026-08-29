@@ -130,7 +130,7 @@ def rediarize_project(job_id: str, cfg, num_speakers: int | None = None,
     summary = result["speakers"]
 
     def mutate(p: Project) -> None:
-        from project.schema import Speaker, color_for
+        from project.schema import Speaker, free_color
 
         by_id = {s.id: s for s in p.speakers}
         manual = {s.id: s.speaker_id for s in p.segments
@@ -148,7 +148,7 @@ def rediarize_project(job_id: str, cfg, num_speakers: int | None = None,
         for idx, sid in enumerate(sorted(new_ids)):
             if sid not in by_id:
                 p.speakers.append(Speaker(id=sid, label=f"Спикер {sid[1:]}",
-                                          color=color_for(len(p.speakers))))
+                                          color=free_color([x.color for x in p.speakers])))
         used = {s.speaker_id for s in p.segments}
         for sp in p.speakers:
             if sp.id not in used:

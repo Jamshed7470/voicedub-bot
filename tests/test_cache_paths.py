@@ -84,3 +84,66 @@ def test_load_profiles_survives_old_format(tmp_path):
     profiles = cache.load_profiles(analysis)
     assert Path(profiles["S1"]["ref_main"]).exists()
     assert "old" not in profiles["S1"]["refs_emotion"]["happy"]
+
+
+# --------------------------------------------- кэш не владеет профилями
+
+def make_job(tmp_path: Path) -> Path:
+    """Папка задачи с готовым разбором, как её оставляет пайплайн."""
+    import json
+
+    job = tmp_path / "jobs" / "job1"
+    (job / "speakers" / "S1").mkdir(parents=True)
+    for name in ("ref_main.wav", "voice_profile.pt", "identity_embedding.npy"):
+        (job / "speakers" / "S1" / name).write_bytes(b"x" * 100)
+    (job / "speakers.json").write_text(json.dumps({
+        "S1": {"id": "S1",
+               "ref_main": str(job / "speakers" / "S1" / "ref_main.wav"),
+               "reference": {"path": str(job / "speakers" / "S1" / "ref_main.wav")},
+               "voice": {"mode": "clone", "locked": True,
+                         "profile_path": str(job / "speakers" / "S1" / "voice_profile.pt"),
+                         "identity_path": str(job / "speakers" / "S1" / "identity_embedding.npy")}}
+    }), encoding="utf-8")
+    (job / "transcript.json").write_text('{"segments": []}', encoding="utf-8")
+    return job
+
+
+def test_store_analysis_leaves_profiles_in_job(tmp_path, monkeypatch):
+    """Кэш забирает КОПИЮ: задача не должна от него зависеть.
+
+    Раньше папка speakers/ переезжала в кэш. Очистка кэша по возрасту
+    уносила профили голосов активной задачи, и та узнавала об этом только
+    на синтезе — «у спикера нет профиля», хотя всё было посчитано.
+    """
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    job = make_job(tmp_path)
+
+    stored = cache.store_analysis(job, "key1", "auto")
+    assert stored is not None
+
+    assert (job / "speakers" / "S1" / "voice_profile.pt").exists(), \
+        "профиль ушёл из задачи в кэш"
+    assert (stored / "speakers" / "S1" / "voice_profile.pt").exists(), \
+        "копия в кэш не попала"
+
+
+def test_job_survives_cache_purge(tmp_path, monkeypatch):
+    """Удаление кэша не ломает задачу, взявшую из него разбор."""
+    import shutil
+
+    monkeypatch.setattr(cache, "CACHE_DIR", tmp_path / "cache")
+    source_job = make_job(tmp_path)
+    stored = cache.store_analysis(source_job, "key1", "auto")
+
+    # новая задача берёт разбор из кэша
+    new_job = tmp_path / "jobs" / "job2"
+    new_job.mkdir(parents=True)
+    profiles = cache.adopt_analysis(stored, new_job)
+
+    # ...и кэш исчезает
+    shutil.rmtree(tmp_path / "cache")
+
+    assert cache.verify_profiles(profiles), "профили пропали вместе с кэшем"
+    path = Path(profiles["S1"]["voice"]["profile_path"])
+    assert path.exists()
+    assert "cache" not in path.parts, "путь всё ещё смотрит в кэш"

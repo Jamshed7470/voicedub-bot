@@ -189,7 +189,9 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
         src_lang = tr["language"]
         segments = tr["segments"]
         events = tr["events"]
-        profiles = source_cache.load_profiles(cached_analysis)
+        # разбор забирается из кэша В ПАПКУ ЗАДАЧИ: очистка кэша не должна
+        # уносить профили голосов у работающей задачи
+        profiles = source_cache.adopt_analysis(cached_analysis, job_dir)
         _save_json(job_dir / "transcript.json", tr)
 
         same_lang = _norm_lang(src_lang) == _norm_lang(tgt_lang)
@@ -276,14 +278,11 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
         stored = await asyncio.to_thread(source_cache.store_analysis, job_dir,
                                          src_key, spk_hint)
         if stored:
-            cached_profiles = source_cache.load_profiles(stored)
-            # профили переехали в кэш вместе с папкой speakers/: пути в них
-            # переписаны, но проверить это надо СЕЙЧАС, а не на синтезе через
-            # полчаса, когда причина уже не видна
-            if source_cache.verify_profiles(cached_profiles):
-                profiles = cached_profiles
-            else:
-                log.warning("Кэш разбора неполон — работаю с профилями задачи")
+            # в кэш легла КОПИЯ; профили остаются в папке задачи, поэтому
+            # переписывать пути не нужно — достаточно убедиться, что целы
+            if not source_cache.verify_profiles(profiles):
+                log.warning("Профили задачи неполны — часть голосов придётся "
+                            "пересобрать в студии")
 
     # ---------- 7. Перевод ----------
     await report(7)

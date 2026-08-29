@@ -98,7 +98,11 @@ PROFILE_PATH_FIELDS = (
 
 
 def load_profiles(analysis: Path) -> dict:
-    """Профили спикеров с путями, переписанными на папку кэша."""
+    """Профили спикеров с путями, переписанными на указанную папку.
+
+    Работает и для кэша, и для папки задачи: важно лишь, что рядом с
+    speakers.json лежит папка speakers/.
+    """
     with open(analysis / "speakers.json", encoding="utf-8") as f:
         profiles = json.load(f)
     spk_root = analysis / "speakers"
@@ -175,7 +179,17 @@ def store_media(job_dir: Path, key: str) -> Path | None:
 
 
 def store_analysis(job_dir: Path, key: str, speakers_hint: str) -> Path | None:
-    """Переносит транскрипт и профили спикеров в кэш."""
+    """Кладёт КОПИЮ разбора и профилей в кэш.
+
+    Именно копию, а не перенос. Раньше папка speakers/ переезжала в кэш, и
+    задача начинала зависеть от него: очистка кэша по возрасту или размеру
+    уносила профили голосов активной задачи, а та узнавала об этом только
+    на синтезе — «у спикера нет профиля», хотя всё было посчитано.
+
+    Профили весят мегабайты, кэш экономил единицы гигабайт на диске — цена
+    несопоставима с потерей часа работы. Кэш остаётся ускорителем для
+    следующих задач, но источником правды для текущей быть перестал.
+    """
     dst = CACHE_DIR / key / analysis_name(speakers_hint)
     if (dst / ANALYSIS_MARKER).exists():
         return dst
@@ -184,9 +198,9 @@ def store_analysis(job_dir: Path, key: str, speakers_hint: str) -> Path | None:
         return None
     dst.mkdir(parents=True, exist_ok=True)
     try:
-        shutil.move(str(job_dir / "speakers"), str(dst / "speakers"))
+        shutil.copytree(job_dir / "speakers", dst / "speakers",
+                        dirs_exist_ok=True)
         for n in ANALYSIS_FILES:
-            # json остаются в папке задачи для отладки
             shutil.copy2(job_dir / n, dst / n)
         (dst / ANALYSIS_MARKER).write_text(str(int(time.time())), encoding="utf-8")
         log.info("Кэш: сохранил разбор голосов %s/%s", key,
@@ -196,6 +210,29 @@ def store_analysis(job_dir: Path, key: str, speakers_hint: str) -> Path | None:
         log.exception("Кэш: не удалось сохранить разбор %s", key)
         shutil.rmtree(dst, ignore_errors=True)
         return None
+
+
+def adopt_analysis(analysis: Path, job_dir: Path) -> dict:
+    """Забирает разбор из кэша В ПАПКУ ЗАДАЧИ и отдаёт профили с её путями.
+
+    Задача, взявшая разбор из кэша, тоже не должна от него зависеть:
+    очистка кэша не имеет права её сломать.
+    """
+    src = analysis / "speakers"
+    if src.exists():
+        try:
+            shutil.copytree(src, job_dir / "speakers", dirs_exist_ok=True)
+        except OSError:
+            log.exception("Кэш: не удалось скопировать профили в задачу — "
+                          "работаю по путям кэша")
+            return load_profiles(analysis)
+    for n in ANALYSIS_FILES:
+        if (analysis / n).exists() and not (job_dir / n).exists():
+            try:
+                shutil.copy2(analysis / n, job_dir / n)
+            except OSError:
+                pass
+    return load_profiles(job_dir)
 
 
 def purge(max_gb: float = 10.0, keep_days: int = 14) -> None:

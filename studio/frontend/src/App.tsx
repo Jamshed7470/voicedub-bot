@@ -10,6 +10,7 @@ import { Player } from "./components/Player";
 import { SegmentTable } from "./components/SegmentTable";
 import { SpeakerPanel } from "./components/SpeakerPanel";
 import { openEvents } from "./lib/api";
+import { stopAll } from "./lib/player";
 import { STAGE_LABELS } from "./lib/types";
 import { useProject, visibleSegments } from "./store/useProject";
 
@@ -135,6 +136,7 @@ function RangePreviewButton() {
     const video = (window as unknown as { __player?: HTMLVideoElement }).__player;
     const audio = document.getElementById("range-audio") as HTMLAudioElement | null;
     if (!audio || !preview.url) return;
+    stopAll();                        // прослушивание голоса не должно мешать
     audio.currentTime = 0;
     if (video) {
       video.pause();

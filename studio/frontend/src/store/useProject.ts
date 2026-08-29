@@ -50,6 +50,8 @@ interface State {
   assignSpeaker: (segmentIds: number[], speakerId: string) => Promise<void>;
   patchSpeaker: (id: string, patch: Record<string, unknown>) => Promise<void>;
   mergeSpeakers: (from: string, into: string) => Promise<void>;
+  createSpeaker: () => Promise<void>;
+  deleteSpeaker: (id: string, moveTo: string | null) => Promise<void>;
   rebuildProfile: (id: string) => Promise<void>;
   splitSegment: (id: number, at: number) => Promise<void>;
   mergeWithNext: (id: number) => Promise<void>;
@@ -190,6 +192,37 @@ export const useProject = create<State>((set, get) => ({
         notice: `Переназначено реплик: ${res.moved_segments}. ` +
           "Профиль голоса нужно пересобрать.",
       });
+    } catch (e) {
+      await handleError(e, set, get);
+    }
+  },
+
+  createSpeaker: async () => {
+    const project = get().project;
+    if (!project) return;
+    set({ saving: true });
+    try {
+      await api.createSpeaker({}, project.version);
+      await get().refresh();
+      set({ saving: false,
+            notice: "Спикер добавлен. Назначьте ему реплики в таблице, "
+                    + "затем нажмите «Пересобрать»" });
+    } catch (e) {
+      await handleError(e, set, get);
+    }
+  },
+
+  deleteSpeaker: async (id, moveTo) => {
+    const project = get().project;
+    if (!project) return;
+    set({ saving: true });
+    try {
+      const res = await api.deleteSpeaker(id, moveTo, project.version);
+      await get().refresh();
+      set({ saving: false,
+            notice: res.moved_segments
+              ? `Спикер ${id} удалён, ${res.moved_segments} реплик переданы ${moveTo}`
+              : `Спикер ${id} удалён` });
     } catch (e) {
       await handleError(e, set, get);
     }

@@ -22,7 +22,8 @@ from pydantic import BaseModel
 from core.config import load_config
 from core.errors import UserError
 from project import history, store
-from project.schema import Project, Segment, Stage, VoiceOverride, color_for
+from project.schema import (Project, Segment, Stage, VoiceOverride,
+                            free_color)
 from studio import auth, preview
 from studio.ws import hub
 
@@ -496,6 +497,98 @@ async def patch_speaker(spk: str, patch: SpeakerPatch,
 class SpeakerMerge(BaseModel):
     from_id: str
     into_id: str
+
+
+class SpeakerCreate(BaseModel):
+    name: str | None = None
+    gender: str = "unknown"
+
+
+@router.post("/projects/{job_id}/speakers", status_code=201)
+async def create_speaker(body: SpeakerCreate,
+                         if_match: str | None = Header(None, alias="If-Match"),
+                         proj: Project = Depends(require_project)):
+    """Добавляет спикера вручную.
+
+    Нужен, когда система свела двух людей в одного: удалить лишнее нельзя,
+    но можно завести нового и перенести на него его реплики. Профиль
+    собирается кнопкой «Пересобрать», когда реплики назначены — раньше
+    собирать не из чего.
+    """
+    version = _check_version(proj, if_match)
+    created: list[str] = []
+
+    def mutate(p: Project) -> None:
+        from project.schema import Speaker
+
+        used = {sp.id for sp in p.speakers}
+        n = 1
+        while f"S{n}" in used:
+            n += 1
+        sid = f"S{n}"
+        created.append(sid)
+        p.speakers.append(Speaker(
+            id=sid, label=f"Спикер {n}", name=body.name or None,
+            gender=body.gender if body.gender in ("male", "female") else "unknown",
+            gender_edited_by_user=body.gender in ("male", "female"),
+            color=free_color([sp.color for sp in p.speakers]),
+        ))
+        history.record(p, "create_speaker", {"speakers_added": [sid]},
+                       {"id": sid})
+
+    updated = _apply(proj.job_id, version, mutate, "create_speaker")
+    return updated.speaker(created[0]).model_dump(mode="json")
+
+
+@router.delete("/projects/{job_id}/speakers/{spk}")
+async def delete_speaker(spk: str, move_to: str | None = Query(None),
+                         if_match: str | None = Header(None, alias="If-Match"),
+                         proj: Project = Depends(require_project)):
+    """Удаляет спикера. Его реплики переходят к move_to.
+
+    Реплики нельзя оставить без спикера: у них не будет голоса, и синтез
+    остановится. Поэтому спикер с репликами удаляется только вместе с
+    указанием, кому они достанутся.
+    """
+    version = _check_version(proj, if_match)
+    moved = 0
+
+    def mutate(p: Project) -> None:
+        nonlocal moved
+        target = p.speaker(spk)
+        if target is None:
+            raise UserError("Спикер не найден")
+
+        own = [s for s in p.segments if s.speaker_id == spk]
+        alive = [sp for sp in p.active_speakers() if sp.id != spk]
+        if not alive:
+            raise UserError("Это последний спикер — удалять его некуда")
+
+        if own and not move_to:
+            raise UserError(
+                f"У спикера {spk} {len(own)} реплик. Укажите, кому их передать")
+        if move_to and not p.speaker(move_to):
+            raise UserError(f"Спикера {move_to} нет в проекте")
+
+        before = {"speakers": history.snapshot_speakers(p, [spk]),
+                  "segments": [s.model_dump(mode="json") for s in own]}
+        for seg in own:
+            seg.speaker_id = move_to
+            seg.edited_by_user.touch("speaker_id")
+            seg.synth.status = "pending"
+            moved += 1
+
+        p.speakers = [sp for sp in p.speakers if sp.id != spk]
+        if move_to:
+            host = p.speaker(move_to)
+            host.voice.locked = False     # набор реплик изменился
+        history.record(p, "delete_speaker",
+                       {**before, "speakers_removed": [spk]}, {"moved": moved})
+
+    updated = _apply(proj.job_id, version, mutate, "delete_speaker")
+    return {"deleted": spk, "moved_segments": moved,
+            "version": updated.version,
+            "rebuild_required": bool(moved)}
 
 
 @router.post("/projects/{job_id}/speakers/merge")

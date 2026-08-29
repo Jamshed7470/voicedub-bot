@@ -4,8 +4,9 @@
 // голосом будет озвучен. Всё остальное (кастинг, объединение) — действия,
 // которые человек делает, уже поняв ответы.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { mediaUrl } from "../lib/api";
+import { nowPlaying, onPlaybackChange, play } from "../lib/player";
 import { useProject } from "../store/useProject";
 import type { Speaker } from "../lib/types";
 
@@ -19,9 +20,11 @@ function fmtTime(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function play(url: string): void {
-  const audio = new Audio(url);
-  void audio.play().catch(() => undefined);
+/** Подсветка кнопки, которая сейчас звучит. */
+function usePlayingKey(): string | null {
+  const [key, setKey] = useState<string | null>(nowPlaying());
+  useEffect(() => onPlaybackChange(setKey), []);
+  return key;
 }
 
 export function SpeakerPanel() {
@@ -30,7 +33,10 @@ export function SpeakerPanel() {
   const setFilter = useProject((s) => s.setFilter);
   const openDrawer = useProject((s) => s.openDrawer);
   const mergeSpeakers = useProject((s) => s.mergeSpeakers);
+  const createSpeaker = useProject((s) => s.createSpeaker);
+  const deleteSpeaker = useProject((s) => s.deleteSpeaker);
   const [dragging, setDragging] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<Speaker | null>(null);
 
   if (!project) return null;
   const speakers = project.speakers.filter((s) => !s.merged_into);
@@ -42,7 +48,7 @@ export function SpeakerPanel() {
     const n = source.stats.segments_count;
     const ok = window.confirm(
       `Объединить ${source.id} в ${target.id}?\n\n` +
-      `${n} реплик будут переназначены на ${target.display ?? target.id}. ` +
+      `${n} реплик будут переназначены на ${target.name ?? target.id}. ` +
       "Профиль голоса потребует пересборки.");
     if (ok) void mergeSpeakers(dragging, target.id);
     setDragging(null);
@@ -56,13 +62,21 @@ export function SpeakerPanel() {
         <h2 className="text-sm font-semibold tracking-wide">
           СПИКЕРЫ <span className="text-muted font-normal">{speakers.length}</span>
         </h2>
-        <button
-          onClick={() => setFilter({ kind: "all" })}
-          className={`text-xs px-2 py-1 rounded transition-colors ${
-            filter.kind === "all" ? "bg-accent text-white" : "text-muted hover:text-white"
-          }`}>
-          все
-        </button>
+        <span className="flex items-center gap-1">
+          <button
+            onClick={() => setFilter({ kind: "all" })}
+            className={`text-xs px-2 py-1 rounded transition-colors ${
+              filter.kind === "all" ? "bg-accent text-white" : "text-muted hover:text-white"
+            }`}>
+            все
+          </button>
+          <button
+            onClick={() => void createSpeaker()}
+            title="Добавить спикера: система могла свести двух людей в одного"
+            className="text-xs px-2 py-1 rounded bg-ink-600 hover:bg-ink-500">
+            + спикер
+          </button>
+        </span>
       </div>
 
       <div className="p-2 space-y-2">
@@ -78,19 +92,89 @@ export function SpeakerPanel() {
             onDragStart={() => setDragging(sp.id)}
             onDragEnd={() => setDragging(null)}
             onDrop={() => onDrop(sp)}
+            onDelete={() => setRemoving(sp)}
           />
         ))}
       </div>
+
+      {removing && (
+        <DeleteDialog
+          speaker={removing}
+          others={speakers.filter((s) => s.id !== removing.id)}
+          onClose={() => setRemoving(null)}
+          onConfirm={(moveTo) => {
+            void deleteSpeaker(removing.id, moveTo);
+            setRemoving(null);
+          }}
+        />
+      )}
     </aside>
+  );
+}
+
+function DeleteDialog({ speaker, others, onClose, onConfirm }: {
+  speaker: Speaker; others: Speaker[];
+  onClose: () => void; onConfirm: (moveTo: string | null) => void;
+}) {
+  const [target, setTarget] = useState(others[0]?.id ?? "");
+  const count = speaker.stats.segments_count;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 grid place-items-center p-6"
+         onClick={onClose}>
+      <div className="bg-ink-800 border border-line rounded-xl w-full max-w-md p-5"
+           onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-base font-semibold">
+          Удалить {speaker.id} {speaker.name ?? ""}?
+        </h2>
+
+        {count > 0 ? (
+          <>
+            <p className="mt-2 text-xs text-muted leading-relaxed">
+              У него {count} реплик. Без спикера они останутся без голоса, и
+              озвучка остановится — выберите, кому их передать.
+            </p>
+            <select value={target} onChange={(e) => setTarget(e.target.value)}
+                    className="mt-3 w-full bg-ink-900 border border-line rounded
+                               px-2 py-1.5 text-sm">
+              {others.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.id} {s.name ?? s.label} — {s.stats.segments_count} реплик
+                </option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <p className="mt-2 text-xs text-muted">
+            Реплик у него нет — удаление ничего не затронет.
+          </p>
+        )}
+
+        <div className="mt-5 flex gap-2 justify-end">
+          <button onClick={onClose}
+                  className="px-3 py-1.5 rounded bg-ink-600 hover:bg-ink-500 text-sm">
+            Отмена
+          </button>
+          <button
+            disabled={count > 0 && !target}
+            onClick={() => onConfirm(count > 0 ? target : null)}
+            className="px-3 py-1.5 rounded bg-danger hover:brightness-110
+                       text-sm font-medium disabled:opacity-40">
+            Удалить
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
 function SpeakerCard(props: {
   speaker: Speaker; active: boolean; dragging: boolean;
-  onSelect: () => void; onCasting: () => void;
+  onSelect: () => void; onCasting: () => void; onDelete: () => void;
   onDragStart: () => void; onDragEnd: () => void; onDrop: () => void;
 }) {
   const { speaker: sp } = props;
+  const playing = usePlayingKey();
   const patchSpeaker = useProject((s) => s.patchSpeaker);
   const rebuildProfile = useProject((s) => s.rebuildProfile);
   const [editing, setEditing] = useState(false);
@@ -147,6 +231,13 @@ function SpeakerCard(props: {
             ${sp.gender_edited_by_user ? "text-accent" : "text-muted"}`}>
           {GENDER_ICON[sp.gender]}
         </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); props.onDelete(); }}
+          title="Удалить спикера"
+          className="w-6 h-6 rounded text-sm shrink-0 text-muted
+                     hover:bg-danger/20 hover:text-danger">
+          ✕
+        </button>
       </div>
 
       <div className="mt-1.5 flex items-center gap-2 text-xs text-muted">
@@ -184,10 +275,13 @@ function SpeakerCard(props: {
               title="Прослушать голос, которым будет озвучен спикер"
               onClick={(e) => {
                 e.stopPropagation();
-                play(mediaUrl(`/speakers/${sp.id}/reference.wav`));
+                play(mediaUrl(`/speakers/${sp.id}/reference.wav`), `ref:${sp.id}`);
               }}
-              className="w-8 rounded border border-ink-500 bg-ink-800
-                         hover:border-accent text-accent shrink-0">▶</button>
+              className={`w-8 rounded border shrink-0 ${
+                playing === `ref:${sp.id}`
+                  ? "border-accent bg-accent/20 text-accent"
+                  : "border-ink-500 bg-ink-800 hover:border-accent text-accent"}`}>
+              {playing === `ref:${sp.id}` ? "■" : "▶"}</button>
           )}
         </div>
       </div>
@@ -199,10 +293,13 @@ function SpeakerCard(props: {
             title={`Как этот человек звучит в оригинале — образец ${i + 1}`}
             onClick={(e) => {
               e.stopPropagation();
-              play(mediaUrl(`/speakers/${sp.id}/samples/${i}.wav`));
+              play(mediaUrl(`/speakers/${sp.id}/samples/${i}.wav`),
+                   `sample:${sp.id}:${i}`);
             }}
-            className="text-xs px-2 py-1 rounded bg-ink-600 hover:bg-ink-500">
-            ▶{i + 1}
+            className={`text-xs px-2 py-1 rounded ${
+              playing === `sample:${sp.id}:${i}`
+                ? "bg-accent text-white" : "bg-ink-600 hover:bg-ink-500"}`}>
+            {playing === `sample:${sp.id}:${i}` ? "■" : "▶"}{i + 1}
           </button>
         ))}
         {!sp.voice.locked && (

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from project import store
 from project.schema import (Project, Reference, Segment, Speaker, Stage,
-                            Voice)
+                            Voice, color_for)
 from studio import auth
 
 SECRET = "x" * 48
@@ -33,12 +33,16 @@ def project(tmp_path, monkeypatch):
         job_id=JOB, owner_telegram_id=42, lang_src="tr", lang_tgt="ru",
         stage=Stage.REVIEW,
         speakers=[
+            # цвета разные, как их выдаёт пайплайн: на таймлайне спикеров
+            # различают именно по цвету
             Speaker(id="S1", label="Спикер 1", gender="male",
+                    color=color_for(0),
                     reference=Reference(clean_sec=20.0, clone_allowed=True,
                                         best_samples=[1, 2]),
                     voice=Voice(mode="clone", locked=True,
                                 profile_path="p.pt")),
             Speaker(id="S2", label="Спикер 2", gender="female",
+                    color=color_for(1),
                     reference=Reference(clean_sec=4.0, clone_allowed=False),
                     voice=Voice(mode="preset", preset_id="v1", locked=True)),
         ],
@@ -381,3 +385,96 @@ def test_from_pipeline_preserves_user_edits(project):
     updated = store.from_pipeline(JOB, segments, speakers, "tr", "ru")
     assert updated.segment(2).speaker_id == "S2", "ручное назначение затёрто"
     assert updated.speaker("S1").name == "Ведущий", "имя спикера потеряно"
+
+
+# ------------------------------------------------ добавление и удаление
+
+def test_api_create_speaker(client, token, project):
+    """Спикера можно завести вручную: система могла свести двоих в одного."""
+    r = client.post(f"/api/projects/{JOB}/speakers", json={},
+                    headers=headers(token, project.version))
+    assert r.status_code == 201, r.text
+    new = r.json()
+    assert new["id"] == "S3"          # первый свободный номер
+    assert new["stats"]["segments_count"] == 0
+
+    saved = store.load(JOB)
+    assert len(saved.active_speakers()) == 3
+    # цвет не повторяет чужой — спикеров различают по цвету на таймлайне
+    colors = [s.color for s in saved.speakers]
+    assert len(set(colors)) == len(colors)
+
+
+def test_api_create_speaker_reuses_free_id(client, token, project):
+    """Номер берётся свободный, а не «следующий по счётчику»."""
+    v = project.version
+    client.delete(f"/api/projects/{JOB}/speakers/S2?move_to=S1",
+                  headers=headers(token, v))
+    v = store.load(JOB).version
+    r = client.post(f"/api/projects/{JOB}/speakers", json={},
+                    headers=headers(token, v))
+    assert r.json()["id"] == "S2", "освободившийся номер не переиспользован"
+
+
+def test_api_delete_speaker_moves_segments(client, token, project):
+    r = client.delete(f"/api/projects/{JOB}/speakers/S2?move_to=S1",
+                      headers=headers(token, project.version))
+    assert r.status_code == 200, r.text
+    assert r.json()["moved_segments"] == 2
+
+    saved = store.load(JOB)
+    assert saved.speaker("S2") is None
+    assert all(s.speaker_id == "S1" for s in saved.segments)
+    assert saved.speaker("S1").stats.segments_count == 4
+    # набор реплик изменился — профиль принимающего надо пересобрать
+    assert saved.speaker("S1").voice.locked is False
+
+
+def test_api_delete_speaker_requires_target(client, token, project):
+    """Реплики нельзя оставить без спикера: у них не будет голоса."""
+    r = client.delete(f"/api/projects/{JOB}/speakers/S2",
+                      headers=headers(token, project.version))
+    assert r.status_code == 400
+    assert "укажите" in r.json()["error"].lower()
+    assert store.load(JOB).speaker("S2") is not None
+
+
+def test_api_delete_empty_speaker_needs_no_target(client, token, project):
+    """У пустого спикера переносить нечего."""
+    v = project.version
+    client.post(f"/api/projects/{JOB}/speakers", json={}, headers=headers(token, v))
+    v = store.load(JOB).version
+    r = client.delete(f"/api/projects/{JOB}/speakers/S3", headers=headers(token, v))
+    assert r.status_code == 200
+    assert r.json()["moved_segments"] == 0
+
+
+def test_api_cannot_delete_last_speaker(client, token, project):
+    v = project.version
+    client.delete(f"/api/projects/{JOB}/speakers/S2?move_to=S1",
+                  headers=headers(token, v))
+    v = store.load(JOB).version
+    r = client.delete(f"/api/projects/{JOB}/speakers/S1", headers=headers(token, v))
+    assert r.status_code == 400
+    assert store.load(JOB).speaker("S1") is not None
+
+
+def test_api_undo_restores_deleted_speaker(client, token, project):
+    """Отмена возвращает спикера вместе с его репликами."""
+    client.delete(f"/api/projects/{JOB}/speakers/S2?move_to=S1",
+                  headers=headers(token, project.version))
+    v = store.load(JOB).version
+    r = client.post(f"/api/projects/{JOB}/undo", headers=headers(token, v))
+    assert r.status_code == 200, r.text
+
+    saved = store.load(JOB)
+    assert saved.speaker("S2") is not None, "спикер не вернулся"
+    assert saved.speaker("S2").stats.segments_count == 2, "реплики не вернулись"
+
+
+def test_api_undo_removes_created_speaker(client, token, project):
+    client.post(f"/api/projects/{JOB}/speakers", json={},
+                headers=headers(token, project.version))
+    v = store.load(JOB).version
+    client.post(f"/api/projects/{JOB}/undo", headers=headers(token, v))
+    assert store.load(JOB).speaker("S3") is None

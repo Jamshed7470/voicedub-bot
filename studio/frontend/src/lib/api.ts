@@ -85,6 +85,17 @@ export const api = {
       method: "PATCH", body: JSON.stringify(patch),
     }, version),
 
+  createSpeaker: (body: { name?: string; gender?: string }, version: number) =>
+    request(`${base()}/speakers`, {
+      method: "POST", body: JSON.stringify(body),
+    }, version),
+
+  deleteSpeaker: (id: string, moveTo: string | null, version: number) =>
+    request<{ deleted: string; moved_segments: number }>(
+      `${base()}/speakers/${id}` +
+      (moveTo ? `?move_to=${encodeURIComponent(moveTo)}` : ""),
+      { method: "DELETE" }, version),
+
   mergeSpeakers: (from_id: string, into_id: string, version: number) =>
     request<{ moved_segments: number }>(`${base()}/speakers/merge`, {
       method: "POST", body: JSON.stringify({ from_id, into_id }),
