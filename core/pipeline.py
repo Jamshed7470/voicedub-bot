@@ -342,6 +342,23 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
     # причём разным спикерам — разные голоса
     bank = await asyncio.to_thread(casting.assign_voices, profiles, cfg)
 
+    # темп речи измеряется у самих голосов: он зависит от голоса сильнее,
+    # чем от языка (разброс 9.2-13.9 симв/с на четырёх голосах банка), а
+    # бюджет перевода без этого систематически завышен
+    def _measure_rates() -> dict[str, float]:
+        from synth.render import ProfileCache
+        from voices import rate as rate_mod
+
+        try:
+            cache = ProfileCache(profiles, bank)
+            return rate_mod.measure_all(get_engine(cfg), cache, profiles,
+                                        tgt_lang, cfg)
+        except Exception:  # noqa: BLE001 — без замера работаем по таблице
+            log.exception("Не удалось измерить темп голосов")
+            return {}
+
+    voice_rates = await asyncio.to_thread(_measure_rates)
+
     # длинные реплики сокращаются пачкой ДО синтеза: поштучные запросы к
     # переводчику из цикла на полуторачасовом фильме стоят часов
     limits = render_mod.slot_limits(segments, cfg)
@@ -351,7 +368,7 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
                and not render_mod.reusable(job_dir / "synth" / f"seg_{s['id']}.wav",
                                            done_ids, s["id"])]
     await asyncio.to_thread(_precompress, pending, limits, translator, tgt_lang,
-                            cfg, None)
+                            cfg, None, voice_rates)
 
     def _stage9():
         return render_mod.render_all(
@@ -794,13 +811,23 @@ def _analysis_still_valid(cached_analysis, cfg):
 
 
 def _precompress(segments: list[dict], limits: dict[int, float], translator,
-                 tgt_lang: str, cfg, progress=None) -> int:
-    """Заранее укорачивает реплики, которые не поместятся даже с ускорением.
+                 tgt_lang: str, cfg, progress=None,
+                 rates: dict[str, float] | None = None) -> int:
+    """Заранее укорачивает реплики, которые не поместятся в свой слот.
 
     Иначе то же самое делается в цикле синтеза по одной реплике: на часовом
     ролике это сотни отдельных обращений к модели, и они стоят дороже самого
-    синтеза. Считаем бюджет по табличному темпу речи и просим сократить
-    пачкой; не получилось — цикл синтеза разберётся сам, как и раньше.
+    синтеза.
+
+    Бюджет считается по ИЗМЕРЕННОМУ темпу голоса, который будет говорить
+    (rates), а не по таблице языка. Замер: таблица обещает 14 симв/с для
+    русского, XTTS выдаёт 12.5 в среднем и 9.2 на медленном голосе. С
+    табличным бюджетом переводчику разрешалась фраза, которая физически не
+    помещается, и её потом приходилось ускорять до неразборчивости.
+
+    Целевое ускорение — рабочее (atempo_max), а не предельное. Раньше
+    планка была atempo_max × speed_soft_max = 1.38, то есть «нормой»
+    считалась речь на пределе разборчивости.
     """
     if not bool(cfg.y("translation", "precompress", default=True)):
         return 0
@@ -811,8 +838,15 @@ def _precompress(segments: list[dict], limits: dict[int, float], translator,
     from core.normalize import normalize_for_tts
     from core.translate import compute_max_chars
 
-    atempo = cfg.atempo_max * float(cfg.y("timing", "speed_soft_max", default=1.15))
-    ratio = float(cfg.y("translation", "precompress_ratio", default=1.15))
+    def slot_budget(seg: dict, seconds: float) -> int:
+        """Сколько символов уместится за seconds голосом ЭТОГО спикера."""
+        rate = (rates or {}).get(seg.get("speaker"))
+        if not rate:
+            return compute_max_chars(seg, tgt_lang, cfg, seconds)
+        return max(10, int(seconds * rate))
+
+    atempo = cfg.atempo_max
+    ratio = float(cfg.y("translation", "precompress_ratio", default=1.0))
     batch_size = int(cfg.y("translation", "precompress_batch", default=30))
 
     items, budgets = [], {}
@@ -820,12 +854,12 @@ def _precompress(segments: list[dict], limits: dict[int, float], translator,
         if seg.get("skip_tts") or not seg["text"].strip():
             continue
         slot = max(0.4, limits.get(seg["id"], seg["end"]) - seg["start"])
-        # сколько символов реально произносится в слоте с допустимым ускорением
-        budget = compute_max_chars(seg, tgt_lang, cfg, slot * atempo)
-        if len(seg["text"]) > budget * ratio:
-            items.append({"id": seg["id"], "max_chars": budget,
+        # сколько символов реально произносится в слоте с рабочим ускорением
+        limit = slot_budget(seg, slot * atempo)
+        if len(seg["text"]) > limit * ratio:
+            items.append({"id": seg["id"], "max_chars": limit,
                           "text": seg["text"]})
-            budgets[seg["id"]] = budget
+            budgets[seg["id"]] = limit
     if not items:
         return 0
 

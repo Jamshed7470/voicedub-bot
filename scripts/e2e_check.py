@@ -34,6 +34,36 @@ os.chdir(ROOT)
 VIDEO = Path(sys.argv[1] if len(sys.argv) > 1
              else "tests/fixtures/dialog/audio.wav")
 TARGET_LANG = sys.argv[2] if len(sys.argv) > 2 else "en"
+
+
+def expected_from_input(video: Path) -> dict:
+    """Чего ждать от этого входа: длительность и, если есть, число голосов.
+
+    Ожидания берутся из самого файла, а не зашиты в скрипт: иначе прогон
+    на другом материале выдаёт ложные «провалы», за которыми не видно
+    настоящих.
+    """
+    import json
+    import subprocess
+
+    out = {"duration": None, "speakers": None}
+    try:
+        out["duration"] = float(subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=nw=1:nk=1", str(video)],
+            capture_output=True, text=True, timeout=60).stdout.strip())
+    except Exception:  # noqa: BLE001
+        pass
+
+    # рядом с фикстурой лежит разметка с известным числом голосов
+    truth = video.parent / "truth.json"
+    if truth.exists():
+        try:
+            out["speakers"] = json.loads(
+                truth.read_text(encoding="utf-8"))["true_speakers"]
+        except Exception:  # noqa: BLE001
+            pass
+    return out
 JOB_ID = "e2echeck"
 PORT = 8097
 # секрет только для этой проверки: настоящий STUDIO_SECRET из .env не трогаем
@@ -171,9 +201,13 @@ async def act_as_human():
         return
 
     speakers = data["speakers"]
-    check("найдено ровно 2 спикера (в фикстуре их 2)",
-          len([s for s in speakers if not s["merged_into"]]) == 2,
-          f"найдено {len([s for s in speakers if not s['merged_into']])}")
+    found = len([s for s in speakers if not s["merged_into"]])
+    want = EXPECTED["speakers"]
+    if want:
+        check(f"найдено ровно {want} спикера (столько в разметке)",
+              found == want, f"найдено {found}")
+    else:
+        log.info("Спикеров найдено: %d (эталона для этого файла нет)", found)
 
     locked = [s for s in speakers if s["voice"]["locked"]]
     check("у каждого спикера заблокированный профиль (INV-1)",
@@ -210,10 +244,17 @@ async def act_as_human():
     return seg_id
 
 
+EXPECTED: dict = {}
+
+
 async def main() -> int:
+    global EXPECTED
     if not VIDEO.exists():
         log.error("нет файла %s", VIDEO)
         return 1
+    EXPECTED = expected_from_input(VIDEO)
+    log.info("Ожидания из входа: длительность %s, голосов %s",
+             EXPECTED["duration"], EXPECTED["speakers"] or "не задано")
 
     store.job_dir(JOB_ID).mkdir(parents=True, exist_ok=True)
     (store.job_dir(JOB_ID) / "approved.flag").unlink(missing_ok=True)
@@ -297,8 +338,10 @@ async def main() -> int:
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=nw=1:nk=1", str(out)],
                 capture_output=True, text=True, timeout=60).stdout.strip())
-            check("длительность совпадает с исходником (±2 с)",
-                  abs(dur - 144.8) <= 2.0, f"{dur:.1f} с против 144.8 с")
+            want = EXPECTED["duration"]
+            if want:
+                check("длительность совпадает с исходником (±2 с)",
+                      abs(dur - want) <= 2.0, f"{dur:.1f} с против {want:.1f} с")
         except Exception as e:  # noqa: BLE001
             check("длительность проверена", False, repr(e))
 
