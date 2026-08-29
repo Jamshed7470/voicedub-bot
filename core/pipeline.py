@@ -478,7 +478,11 @@ async def _open_review(job, bot, cfg, hooks, job_dir: Path, segments: list[dict]
     from bot.review import request_review, wait_for_approval
 
     await hooks.report(8, "жду проверки в студии", 100)
-    await request_review(job, bot, cfg, proj)
+    try:
+        await request_review(job, bot, cfg, proj)
+    except Exception:  # noqa: BLE001 — сообщение вторично, разбор первичен
+        log.exception("Приглашение на проверку не отправлено; задача ждёт "
+                      "утверждения. Команда /review выдаст ссылку заново")
     log.info("Задача %s ждёт утверждения в студии", job.id)
 
     approved = await wait_for_approval(job.id,

@@ -28,9 +28,48 @@ _waiting: dict[str, asyncio.Event] = {}
 POLL_SEC = 5.0
 
 
+# Telegram не принимает в кнопке адреса вида localhost и 127.0.0.1:
+# «Bad Request: inline keyboard button URL is invalid». Проверять это
+# заранее обязательно — иначе отказ приходит на отправку сообщения, то
+# есть в самом конце разбора, и роняет задачу вместе со всей работой.
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+
+
+def link_is_button_safe(link: str | None) -> bool:
+    """Примет ли Telegram такой адрес как кнопку."""
+    if not link or not link.startswith(("http://", "https://")):
+        return False
+    host = link.split("//", 1)[1].split("/", 1)[0].split(":", 1)[0].lower()
+    return host not in LOCAL_HOSTS
+
+
+def lan_url(public_url: str) -> str | None:
+    """Тот же адрес, но по IP машины в локальной сети.
+
+    Студия слушает 0.0.0.0, поэтому с телефона она доступна — не хватает
+    только адреса: localhost на телефоне указывает на сам телефон.
+    """
+    import socket
+
+    host = public_url.split("//", 1)[-1].split("/", 1)[0]
+    name, _, port = host.partition(":")
+    if name.lower() not in LOCAL_HOSTS:
+        return None
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))          # адрес не опрашивается,
+        ip = sock.getsockname()[0]             # нужен только выбор интерфейса
+        sock.close()
+    except OSError:
+        return None
+    if ip.startswith("127."):
+        return None
+    return f"http://{ip}:{port or '8080'}"
+
+
 def review_keyboard(job_id: str, link: str | None) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
-    if link:
+    if link_is_button_safe(link):
         rows.append([InlineKeyboardButton(text="🎬 Открыть студию", url=link)])
     rows.append([
         InlineKeyboardButton(text="✅ Утвердить как есть",
@@ -92,6 +131,17 @@ async def request_review(job, bot, cfg, proj: Project) -> None:
     if not link:
         text += ("\n\n⚠️ Ссылка на студию недоступна: не задан STUDIO_SECRET. "
                  "См. README, раздел «Студия проверки».")
+    elif not link_is_button_safe(link):
+        # кнопкой такой адрес не сделать — отдаём ссылку текстом, её можно
+        # скопировать. Заодно даём адрес по локальной сети: с телефона
+        # localhost указывает на сам телефон и никуда не ведёт
+        text += f"\n\n<b>Открыть студию:</b>\n<code>{link}</code>"
+        alt = lan_url(cfg.studio_url)
+        if alt:
+            text += ("\n\nС телефона в той же сети — тот же адрес, но "
+                     f"<code>{alt}</code> вместо localhost.\n"
+                     "Чтобы ссылка стала кнопкой, впишите этот адрес в .env "
+                     "как STUDIO_PUBLIC_URL.")
 
     if bot is None:
         plain = re.sub(r"</?b>", "", text)
@@ -101,8 +151,23 @@ async def request_review(job, bot, cfg, proj: Project) -> None:
                  store.job_dir(proj.job_id) / "approved.flag")
         return
 
-    await bot.send_message(job.chat_id, text, parse_mode="HTML",
-                           reply_markup=review_keyboard(proj.job_id, link))
+    try:
+        await bot.send_message(job.chat_id, text, parse_mode="HTML",
+                               reply_markup=review_keyboard(proj.job_id, link))
+    except Exception:  # noqa: BLE001
+        # Разбор уже сделан и стоил минут работы. Сорвавшаяся отправка
+        # сообщения не имеет права его обесценить: пробуем без клавиатуры,
+        # а не выходим с ошибкой.
+        log.exception("Не удалось отправить сообщение о проверке — "
+                      "повторяю без кнопок")
+        try:
+            await bot.send_message(
+                job.chat_id,
+                text + "\n\nУтвердить: команда /approve",
+                parse_mode="HTML")
+        except Exception:  # noqa: BLE001
+            log.exception("Сообщение о проверке отправить не удалось. "
+                          "Ссылка: %s", link)
 
 
 async def wait_for_approval(job_id: str, timeout_hours: int = 72) -> bool:

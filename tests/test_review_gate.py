@@ -169,3 +169,88 @@ def test_voice_map_truncates_long_cast(project):
     text = review.voice_map_text(store.load(JOB), {}, overall=0.8)
     assert "и ещё" in text
     assert len(text.split("\n")) < 25
+
+
+# ------------------------------------------------------ ссылка и её отправка
+
+def test_localhost_link_cannot_be_a_button():
+    """Telegram отвергает localhost в кнопке — это надо знать заранее.
+
+    Иначе отказ приходит на отправку сообщения, то есть в самом конце
+    разбора, и роняет задачу вместе со всей проделанной работой.
+    """
+    assert not review.link_is_button_safe("http://localhost:8080/studio/x?t=1")
+    assert not review.link_is_button_safe("http://127.0.0.1:8080/studio/x")
+    assert not review.link_is_button_safe(None)
+    assert not review.link_is_button_safe("ftp://example.com/x")
+    assert review.link_is_button_safe("http://192.168.0.10:8080/studio/x")
+    assert review.link_is_button_safe("https://dub.example.com/studio/x")
+
+
+def test_keyboard_omits_unusable_link(project):
+    """Кнопка «Открыть студию» не создаётся для непригодного адреса."""
+    local = review.review_keyboard(JOB, "http://localhost:8080/studio/x")
+    texts = [b.text for row in local.inline_keyboard for b in row]
+    assert not any("Открыть студию" in t for t in texts)
+    assert any("Утвердить" in t for t in texts)
+
+    public = review.review_keyboard(JOB, "https://dub.example.com/studio/x")
+    texts = [b.text for row in public.inline_keyboard for b in row]
+    assert any("Открыть студию" in t for t in texts)
+
+
+@pytest.mark.asyncio
+async def test_local_link_goes_into_message_text(project):
+    """Раз кнопкой нельзя — ссылка должна быть в тексте, её скопируют."""
+    sent = []
+
+    class Bot:
+        async def send_message(self, chat_id, text, **kw):
+            sent.append(text)
+
+    class Job:
+        user_id, chat_id = 7, 7
+
+    await review.request_review(Job(), Bot(), FakeCfg(), project)
+    assert sent, "сообщение не отправлено"
+    assert "localhost:8080/studio/" in sent[0]
+    assert "Открыть студию" in sent[0]
+
+
+@pytest.mark.asyncio
+async def test_send_failure_does_not_lose_the_job(project, caplog):
+    """Сорвавшаяся отправка не обесценивает разбор: пробуем без кнопок."""
+    attempts = []
+
+    class Bot:
+        async def send_message(self, chat_id, text, **kw):
+            attempts.append(kw.get("reply_markup"))
+            if kw.get("reply_markup") is not None:
+                raise RuntimeError("Bad Request: inline keyboard button URL is invalid")
+
+    class Job:
+        user_id, chat_id = 7, 7
+
+    await review.request_review(Job(), Bot(), FakeCfg(), project)
+    assert len(attempts) == 2, "повтор без клавиатуры не выполнен"
+    assert attempts[1] is None
+
+
+@pytest.mark.asyncio
+async def test_send_failure_twice_is_survived(project):
+    """Даже если Telegram недоступен вовсе — исключение наружу не уходит."""
+    class Bot:
+        async def send_message(self, *a, **kw):
+            raise RuntimeError("сеть недоступна")
+
+    class Job:
+        user_id, chat_id = 7, 7
+
+    await review.request_review(Job(), Bot(), FakeCfg(), project)   # без падения
+
+
+def test_lan_url_replaces_localhost():
+    """Для телефона нужен адрес машины: localhost там указывает на телефон."""
+    alt = review.lan_url("http://localhost:8080")
+    assert alt is None or (alt.startswith("http://") and "localhost" not in alt)
+    assert review.lan_url("https://dub.example.com") is None
