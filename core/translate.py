@@ -506,12 +506,29 @@ class NLLBTranslator:
         self._shortener = GrokTranslator(cfg) if cfg.xai_api_key else None
 
     def _load(self, src_flores: str):
+        """Загружает модель, сначала пробуя локальную копию.
+
+        from_pretrained по умолчанию ходит на HuggingFace даже за уже
+        скачанной моделью. При недоступной сети он уходит в повторы на
+        часы — а локальный переводчик включается именно тогда, когда
+        облачные недоступны, то есть ровно при проблемах со связью.
+        Ночная очередь из-за этого молча вставала.
+        """
         from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
         if self._model is None:
-            log.info("NLLB: загружаю %s", self.model_name)
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name, src_lang=src_flores)
-            self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
+            try:
+                self._tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_name, src_lang=src_flores, local_files_only=True)
+                self._model = AutoModelForSeq2SeqLM.from_pretrained(
+                    self.model_name, local_files_only=True)
+                log.info("NLLB: взял из локального кэша %s", self.model_name)
+            except Exception:  # noqa: BLE001 — копии нет, придётся качать
+                log.info("NLLB: локальной копии нет, качаю %s (несколько ГБ)",
+                         self.model_name)
+                self._tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_name, src_lang=src_flores)
+                self._model = AutoModelForSeq2SeqLM.from_pretrained(self.model_name)
             if self.cfg.device == "cuda":
                 self._model = self._model.to("cuda")
         else:
