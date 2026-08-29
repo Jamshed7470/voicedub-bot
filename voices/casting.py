@@ -62,16 +62,28 @@ def assign_voices(profiles: dict, cfg, bank=None, embedder=None,
     """Назначает голоса банка спикерам в режиме preset.
 
     Меняет profiles на месте: заполняет voice.preset_id и
-    voice.casting_candidates. Возвращает банк (или None, если он не нужен
-    и не доступен) — рендер берёт из него профили пресетов.
+    voice.casting_candidates. Возвращает банк — рендер загружает из него
+    профили пресет-голосов.
+
+    Банк отдаётся всегда, когда хоть один спикер озвучивается пресетом,
+    даже если назначать нечего. Раньше при пустом списке назначений
+    возвращался None, и рендер падал с «банк недоступен» — ровно в том
+    случае, когда человек уже выбрал ВСЕ голоса руками в студии: тогда
+    работы для автоматики не остаётся, а загружать выбранное всё равно
+    нужно.
     """
     from voices.bank import get_bank
 
-    need = [sid for sid, p in profiles.items()
-            if (p.get("voice") or {}).get("mode") == "preset"
-            and not (p.get("voice") or {}).get("edited_by_user")]
+    uses_bank = [sid for sid, p in profiles.items()
+                 if (p.get("voice") or {}).get("mode") == "preset"]
+    need = [sid for sid in uses_bank
+            if not (profiles[sid].get("voice") or {}).get("edited_by_user")]
+
+    if not uses_bank:
+        return bank            # одни клоны — банк не понадобится
     if not need:
-        return bank
+        log.info("Кастинг: все голоса выбраны вручную, назначать нечего")
+        return bank or get_bank()
 
     bank = bank or get_bank()
     voices = bank.all()

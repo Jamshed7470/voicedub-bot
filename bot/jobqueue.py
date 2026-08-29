@@ -14,6 +14,7 @@ from aiogram.types import FSInputFile
 from bot import texts
 from bot.progress import ProgressReporter
 from core.errors import JobCancelled, UserError
+from core.config import JOBS_DIR
 from core.pipeline import PipelineHooks, cleanup_job, run_job
 
 log = logging.getLogger(__name__)
@@ -139,6 +140,12 @@ class JobQueue:
 
         hooks = PipelineHooks(report=report, confirm_same_lang=confirm_same_lang,
                               cancel_event=job.cancel_event)
+        # Папка задачи удаляется ТОЛЬКО после успеха. После сбоя в ней
+        # лежит всё сделанное: разбор, профили голосов, перевод и правки
+        # человека из студии. Прежняя безусловная очистка стирала работу
+        # на десятки минут вместе с project.json — и ссылка на студию
+        # начинала показывать «Проект не найден».
+        keep = False
         try:
             result = await run_job(job, self.bot, hooks, self.cfg)
             job.status = "done"
@@ -151,16 +158,24 @@ class JobQueue:
                 await reporter.finish(texts.CANCELLED)
         except UserError as e:
             job.status = "failed"
+            keep = True
             log.warning("Задача %s: %s", job.id, e.message_ru)
             if reporter:
-                await reporter.finish(f"😔 {e.message_ru}")
+                await reporter.finish(
+                    f"😔 {e.message_ru}\n\nСделанное сохранено — пришлите "
+                    "тот же файл ещё раз, разбор возьмётся из кэша.")
         except Exception:  # noqa: BLE001
             job.status = "failed"
+            keep = True
             log.exception("Задача %s упала", job.id)
             if reporter:
                 await reporter.finish(texts.ERR_GENERIC)
         finally:
-            cleanup_job(job.id)
+            if keep:
+                log.info("Задача %s сохранена для продолжения: %s",
+                         job.id, JOBS_DIR / job.id)
+            else:
+                cleanup_job(job.id)
 
     async def _send_result(self, job: Job, result) -> None:
         """Отправляет готовый дубляж. Что не влезло — остаётся в папке проекта.

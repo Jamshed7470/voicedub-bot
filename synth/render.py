@@ -74,11 +74,24 @@ class ProfileCache:
         preset_id = (override or {}).get("preset_id") or voice.get("preset_id")
 
         if voice.get("mode") == "preset" or (override or {}).get("mode") == "preset":
-            if self.bank is None or not preset_id:
+            if self.bank is None:
+                # банк — общий ресурс приложения, а не аргумент вызова:
+                # не найти его здесь значит остановить озвучку из-за того,
+                # что кто-то выше по стеку его не передал
+                from voices.bank import get_bank
+
+                self.bank = get_bank()
+            if not preset_id:
                 raise UserError(
-                    f"Спикеру {speaker_id} назначен голос из банка, но банк "
-                    "недоступен. Соберите банк: python -m scripts.build_voice_bank")
-            profile = self.bank.load_profile(preset_id)
+                    f"Спикеру {speaker_id} не назначен голос из банка. "
+                    "Выберите его в студии или включите режим клонирования.")
+            try:
+                profile = self.bank.load_profile(preset_id)
+            except KeyError as e:
+                raise UserError(
+                    f"Голоса «{preset_id}» нет в банке. Выберите другой в "
+                    "студии или соберите банк заново: "
+                    "python -m scripts.build_voice_bank --from-dir voice_db") from e
         else:
             path = voice.get("profile_path")
             if not path or not Path(path).exists():

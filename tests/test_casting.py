@@ -223,3 +223,33 @@ def test_greedy_fallback_is_deterministic():
     second = casting._greedy_with_reuse(scores.copy())
     assert first == second
     assert len(set(first)) == 3
+
+
+def test_bank_returned_when_all_voices_chosen_by_hand():
+    """Все голоса выбраны человеком — банк всё равно нужен рендеру.
+
+    Раньше при пустом списке назначений возвращался None, и озвучка
+    падала с «банк недоступен» ровно в том случае, когда человек честно
+    выбрал все голоса в студии: работы для автоматики не осталось, но
+    загружать выбранное всё равно нужно.
+    """
+    speakers = {
+        "S1": {"gender": "male", "centroid": unit(1), "speech_total_s": 10,
+               "voice": {"mode": "preset", "preset_id": "v1",
+                         "edited_by_user": True, "casting_candidates": []}},
+    }
+    voices = [FakeVoice("v1"), FakeVoice("v2")]
+    bank = FakeBank(voices, {"v1": unit(1), "v2": unit(2)})
+
+    result = casting.assign_voices(speakers, FakeCfg(), bank, FakeEmbedder())
+    assert result is bank, "банк не отдан, рендер останется без голосов"
+    assert speakers["S1"]["voice"]["preset_id"] == "v1", "выбор человека затёрт"
+
+
+def test_no_bank_needed_for_pure_clones():
+    """Одни клоны — банк не нужен и не запрашивается."""
+    speakers = {
+        "S1": {"gender": "male", "centroid": unit(1), "speech_total_s": 10,
+               "voice": {"mode": "clone", "casting_candidates": []}},
+    }
+    assert casting.assign_voices(speakers, FakeCfg(), None, FakeEmbedder()) is None
