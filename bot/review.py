@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import logging
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -80,12 +81,26 @@ def summary_text(proj: Project) -> str:
 
 
 async def request_review(job, bot, cfg, proj: Project) -> None:
-    """Отправляет сообщение с кнопками и ссылкой."""
+    """Отправляет сообщение с кнопками и ссылкой.
+
+    Задачу можно запустить и без Telegram (`scripts/run_url.py`) — тогда
+    бота нет, и ссылку надо просто напечатать. Иначе прогон из консоли
+    падал бы ровно в тот момент, когда всё уже посчитано.
+    """
     link = make_link(proj.job_id, job.user_id, cfg)
     text = summary_text(proj)
     if not link:
         text += ("\n\n⚠️ Ссылка на студию недоступна: не задан STUDIO_SECRET. "
                  "См. README, раздел «Студия проверки».")
+
+    if bot is None:
+        plain = re.sub(r"</?b>", "", text)
+        log.info("\n%s\n\nОткройте студию: %s\n"
+                 "Утвердить из консоли: создайте файл %s",
+                 plain, link or "(ссылка недоступна)",
+                 store.job_dir(proj.job_id) / "approved.flag")
+        return
+
     await bot.send_message(job.chat_id, text, parse_mode="HTML",
                            reply_markup=review_keyboard(proj.job_id, link))
 
