@@ -26,6 +26,90 @@ def _speaker_bounds(hint: str, cfg) -> tuple[int | None, int | None, int | None]
     return n, None, None
 
 
+def split_by_word_speakers(seg: dict, max_dur: float) -> list[dict]:
+    """Режет реплику распознавания по смене говорящего.
+
+    WhisperX ставит спикера на КАЖДОЕ слово, а мы раньше брали одного
+    спикера на весь блок и слова выбрасывали. На фильме это давало реплики
+    по двадцать пять секунд, внутри которых говорят трое: озвучить такое
+    одним голосом нельзя, и человеку в студии оставалось резать вручную.
+
+    Границы берутся по словам, поэтому текст делится ровно там, где
+    сменился человек, а не по пропорции времени.
+    """
+    words = [w for w in (seg.get("words") or []) if (w.get("word") or "").strip()]
+    text = (seg.get("text") or "").strip()
+    if not words:
+        # пословной разметки нет — реплика остаётся как есть; пустая
+        # отбрасывается здесь же, чтобы у функции был один вид результата
+        if not text:
+            return []
+        return [{"start": float(seg.get("start") or 0.0),
+                 "end": float(seg.get("end") or 0.0),
+                 "text": text, "speaker": seg.get("speaker")}]
+
+    # у части слов таймингов нет (числа, знаки) — подставляем соседние,
+    # иначе кусок получит нулевую длину и выпадет из микса
+    prev_end = float(seg.get("start") or 0.0)
+    for w in words:
+        w["_start"] = float(w.get("start", prev_end) or prev_end)
+        w["_end"] = float(w.get("end", w["_start"]) or w["_start"])
+        prev_end = w["_end"]
+
+    groups: list[list[dict]] = []
+    current_speaker = None
+    for w in words:
+        spk = w.get("speaker")
+        if spk is None and groups:
+            spk = current_speaker          # слово без метки — к текущему
+        if not groups or spk != current_speaker:
+            groups.append([])
+            current_speaker = spk
+        groups[-1].append(w)
+
+    out: list[dict] = []
+    for group in groups:
+        out.extend(_cap_duration(group, current_speaker, max_dur, seg))
+    return [g for g in out if g["text"].strip()]
+
+
+def _cap_duration(words: list[dict], _unused, max_dur: float,
+                  seg: dict) -> list[dict]:
+    """Дробит слишком длинный кусок одного говорящего по самым длинным паузам.
+
+    Даже монолог в двадцать секунд неудобен: он не влезает в слот, его
+    нельзя переозвучить по частям и трудно проверить в студии.
+    """
+    def make(chunk: list[dict]) -> dict:
+        return {
+            "start": chunk[0]["_start"],
+            "end": max(chunk[-1]["_end"], chunk[0]["_start"] + 0.05),
+            "text": " ".join((w.get("word") or "").strip() for w in chunk).strip(),
+            "speaker": chunk[0].get("speaker") or seg.get("speaker"),
+        }
+
+    if not words:
+        return []
+    if words[-1]["_end"] - words[0]["_start"] <= max_dur:
+        return [make(words)]
+
+    # режем по паузам: сначала самые большие — они почти всегда границы фраз
+    pauses = sorted(
+        ((words[i + 1]["_start"] - words[i]["_end"], i)
+         for i in range(len(words) - 1)),
+        reverse=True)
+    parts = 1 + int((words[-1]["_end"] - words[0]["_start"]) // max_dur)
+    cuts = sorted(i for _, i in pauses[:max(1, parts - 1)])
+
+    out, start = [], 0
+    for cut in cuts:
+        out.append(make(words[start:cut + 1]))
+        start = cut + 1
+    if start < len(words):
+        out.append(make(words[start:]))
+    return out
+
+
 def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
                        speakers_hint: str = "auto",
                        with_turns: bool = False):
@@ -92,23 +176,29 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
     out: list[dict] = []
     last_speaker = None
     orphans = 0
+    max_dur = float(cfg.y("segments", "max_duration_s", default=12.0))
+    split_count = 0
     for seg in segments:
-        text = (seg.get("text") or "").strip()
-        if not text:
-            continue
-        raw = seg.get("speaker")
-        if raw is None:
-            # у сегмента нет спикера (тихая речь) — приписать предыдущему
-            raw = last_speaker or "SPEAKER_00"
-            orphans += 1
-        last_speaker = raw
-        seen.add(raw)
-        out.append({
-            "start": float(seg.get("start") or 0.0),
-            "end": float(seg.get("end") or 0.0),
-            "text": text,
-            "speaker": raw,
-        })
+        pieces = split_by_word_speakers(seg, max_dur)
+        if len(pieces) > 1:
+            split_count += len(pieces) - 1
+        for piece in pieces:
+            text = piece["text"].strip()
+            if not text:
+                continue
+            raw = piece.get("speaker")
+            if raw is None:
+                # у куска нет метки (тихая речь) — приписать предыдущему
+                raw = last_speaker or "SPEAKER_00"
+                orphans += 1
+            last_speaker = raw
+            seen.add(raw)
+            out.append({
+                "start": float(piece["start"]),
+                "end": float(piece["end"]),
+                "text": text,
+                "speaker": raw,
+            })
 
     out = merge_short_segments(
         out,
@@ -117,7 +207,8 @@ def diarize_and_assign(analysis_wav: str, asr_result: dict, cfg,
     )
     for i, seg in enumerate(out, 1):
         seg["id"] = i
-    log.info("Диаризация: %d сегментов, %d сырых кластеров%s", len(out), len(seen),
+    log.info("Диаризация: %d сегментов, %d сырых кластеров%s%s", len(out), len(seen),
+             f", разрезано по смене говорящего: {split_count}" if split_count else "",
              f", без метки спикера: {orphans}" if orphans else "")
     return (out, turns) if with_turns else out
 

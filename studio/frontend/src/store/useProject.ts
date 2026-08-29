@@ -13,7 +13,8 @@ type Filter =
   | { kind: "all" }
   | { kind: "speaker"; id: string }
   | { kind: "flag"; flag: string }
-  | { kind: "edited" };
+  | { kind: "edited" }
+  | { kind: "long" };
 
 interface State {
   project: Project | null;
@@ -394,6 +395,10 @@ export const visibleSegments = (st: State): Segment[] => {
         s.flags.includes((st.filter as { flag: string }).flag));
     case "edited":
       return ordered.filter((s) => s.edited_by_user.fields.length > 0);
+    case "long":
+      // длинная реплика почти всегда означает, что распознавание слепило
+      // речь нескольких человек — её нужно разрезать
+      return ordered.filter((s) => s.end - s.start > 12);
     default:
       return ordered;
   }

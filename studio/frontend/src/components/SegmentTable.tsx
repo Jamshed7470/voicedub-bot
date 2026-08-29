@@ -67,6 +67,7 @@ export function SegmentTable() {
     budget: project.segments.filter((s) => s.over_budget).length,
     qc: project.segments.filter((s) => s.synth.status === "qc_failed").length,
     edited: project.segments.filter((s) => s.edited_by_user.fields.length).length,
+    long: project.segments.filter((s) => s.end - s.start > 12).length,
   };
 
   return (
@@ -95,6 +96,10 @@ export function SegmentTable() {
               disabled={!counts.qc} tone="danger"
               onClick={() => setFilter({ kind: "flag", flag: "identity_qc_failed" })}>
           Тембр не совпал {counts.qc}
+        </Chip>
+        <Chip active={filter.kind === "long"} disabled={!counts.long} tone="warn"
+              onClick={() => setFilter({ kind: "long" })}>
+          ⧗ Длинные {counts.long}
         </Chip>
         <Chip active={filter.kind === "edited"} disabled={!counts.edited}
               onClick={() => setFilter({ kind: "edited" })}>
@@ -134,6 +139,7 @@ export function SegmentTable() {
         <span className="w-20 text-center">увер.</span>
         <span className="w-14 text-center">QC</span>
         <span className="w-16 text-center">звук</span>
+        <span className="w-16 text-center">правка</span>
       </div>
 
       <div ref={box} onScroll={(e) => setScroll(e.currentTarget.scrollTop)}
@@ -171,6 +177,8 @@ function Row({ seg, speaker, top, active, checked, speakers, onSelect }: {
 }) {
   const patchSegment = useProject((s) => s.patchSegment);
   const preview = useProject((s) => s.preview);
+  const splitSegment = useProject((s) => s.splitSegment);
+  const mergeWithNext = useProject((s) => s.mergeWithNext);
   const previewing = useProject((s) => s.previewing.has(seg.id));
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(seg.text_tgt);
@@ -195,8 +203,12 @@ function Row({ seg, speaker, top, active, checked, speakers, onSelect }: {
         ${active ? "bg-accent/15" : checked ? "bg-accent/8" : "hover:bg-ink-700/40"}`}
     >
       <span className="w-12 text-muted tabular-nums">{seg.id}</span>
-      <span className="w-28 text-muted tabular-nums">
-        {fmt(seg.start)}–{fmt(seg.end)}
+      <span className="w-28 tabular-nums flex items-center gap-1">
+        <span className="text-muted">{fmt(seg.start)}–{fmt(seg.end)}</span>
+        {seg.end - seg.start > 12 && (
+          <span title="Длинная реплика — возможно, внутри говорят разные люди. Разделите её кнопкой ✂"
+                className="text-warn">⧗</span>
+        )}
       </span>
 
       <select
@@ -279,6 +291,28 @@ function Row({ seg, speaker, top, active, checked, speakers, onSelect }: {
                   playing === `synth:${seg.id}` ? "bg-accent/25" : ""}`}>
           {previewing ? "…" : playing === `synth:${seg.id}` ? "■" : "▶"}
         </button>
+      </span>
+
+      {/* Разделить и склеить — видимыми кнопками. Раньше это умела только
+          клавиша S, о которой без чтения документации не догадаться, а
+          именно эти две операции нужны чаще всего: распознавание
+          складывает в одну реплику речь нескольких человек. */}
+      <span className="w-16 flex items-center gap-1 justify-center"
+            onClick={(e) => e.stopPropagation()}>
+        <button
+          title="Разделить реплику на месте плеера (клавиша S)"
+          onClick={() => {
+            const v = (window as unknown as { __player?: HTMLVideoElement }).__player;
+            const at = v ? v.currentTime : (seg.start + seg.end) / 2;
+            void splitSegment(seg.id, at);
+          }}
+          className="w-6 h-6 rounded hover:bg-ink-600 text-muted
+                     hover:text-white">✂</button>
+        <button
+          title="Склеить со следующей репликой того же спикера (клавиша M)"
+          onClick={() => void mergeWithNext(seg.id)}
+          className="w-6 h-6 rounded hover:bg-ink-600 text-muted
+                     hover:text-white">⇊</button>
       </span>
     </div>
   );
