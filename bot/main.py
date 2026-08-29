@@ -27,9 +27,14 @@ def setup_logging() -> None:
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
 
 
+# Логгер модульный, а не локальный в amain(): им пользуются и функции
+# вне корутины запуска. Локальная переменная давала NameError у первого же
+# вызывающего за её пределами.
+log = logging.getLogger("voicedub")
+
+
 async def amain() -> None:
     setup_logging()
-    log = logging.getLogger("voicedub")
     cfg = load_config()
 
     if not cfg.bot_token:
@@ -113,8 +118,10 @@ async def amain() -> None:
     dp.include_router(studio_router)
     if cfg.studio_on:
         log.info("Студия проверки включена: %s", cfg.studio_url)
-        if cfg.y("studio", "embedded", default=False):
-            _start_embedded_studio(cfg)
+        if cfg.y("studio", "embedded", default=True):
+            await _start_embedded_studio(cfg)
+        else:
+            log.info("Студия запускается отдельно: python -m studio")
 
     # список команд в меню Telegram (кнопка «/» рядом с полем ввода)
     from aiogram.types import BotCommand
@@ -124,6 +131,9 @@ async def amain() -> None:
             BotCommand(command="lang", description="Язык озвучки"),
             BotCommand(command="settings", description="Настройки"),
             BotCommand(command="status", description="Статус задачи"),
+            BotCommand(command="review", description="Ссылка на студию проверки"),
+            BotCommand(command="approve", description="Утвердить и озвучить"),
+            BotCommand(command="voices", description="Список голосов"),
             BotCommand(command="cancel", description="Отменить задачу"),
             BotCommand(command="help", description="Справка"),
         ])
@@ -134,10 +144,14 @@ async def amain() -> None:
     await dp.start_polling(bot)
 
 
-def _start_embedded_studio(cfg) -> None:
-    """Поднимает студию в процессе бота (STUDIO_EMBEDDED / studio.embedded)."""
-    import asyncio
+async def _start_embedded_studio(cfg) -> None:
+    """Поднимает студию в процессе бота.
 
+    Отдельное окно `python -m studio` — источник тихих отказов: его
+    закрывают, оно падает, его забывают запустить, — и ссылки из бота
+    ведут в «не удаётся получить доступ к сайту». Пока студия живёт
+    внутри бота, умирать ей отдельно от него незачем.
+    """
     import uvicorn
 
     from studio.server import create_app
@@ -145,8 +159,18 @@ def _start_embedded_studio(cfg) -> None:
     config = uvicorn.Config(create_app(), host=cfg.studio_host,
                             port=cfg.studio_port, log_level="warning")
     server = uvicorn.Server(config)
-    asyncio.get_event_loop().create_task(server.serve())
-    log.info("Студия поднята внутри бота на порту %s", cfg.studio_port)
+    asyncio.create_task(server.serve(), name="studio")
+
+    # ждём фактического открытия порта: «задача создана» и «сервер слушает»
+    # это разные вещи, а пользователю нужна вторая
+    for _ in range(40):
+        await asyncio.sleep(0.1)
+        if getattr(server, "started", False):
+            log.info("Студия работает: %s", cfg.studio_url)
+            return
+    log.warning("Студия не поднялась за 4 секунды. Возможно, порт %s занят "
+                "другим процессом — тогда ссылки будут вести в него.",
+                cfg.studio_port)
 
 
 def main() -> None:

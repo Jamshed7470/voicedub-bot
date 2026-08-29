@@ -20,6 +20,25 @@ log = logging.getLogger(__name__)
 router = Router()
 
 
+async def _studio_alive(cfg, timeout: float = 2.0) -> bool:
+    """Отвечает ли студия. Мёртвая ссылка хуже честного отказа."""
+    import asyncio
+    import urllib.request
+
+    def ping() -> bool:
+        try:
+            with urllib.request.urlopen(f"{cfg.studio_url}/health",
+                                        timeout=timeout) as r:
+                return r.status == 200
+        except Exception:  # noqa: BLE001
+            return False
+
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(ping), timeout + 1)
+    except Exception:  # noqa: BLE001 — недоступна и есть ответ
+        return False
+
+
 def _last_project(user_id: int):
     """Последняя задача пользователя, у которой есть project.json."""
     if not JOBS_DIR.exists():
@@ -50,6 +69,16 @@ async def cmd_review(message: Message) -> None:
     proj = _last_project(message.from_user.id)
     if proj is None:
         await message.answer("Пока нечего проверять — пришлите видео или ссылку.")
+        return
+
+    if not await _studio_alive(cfg):
+        await message.answer(
+            "Студия не отвечает по адресу "
+            f"<code>{cfg.studio_url}</code>.\n\n"
+            "Обычно она работает внутри бота. Если в configs/config.yaml "
+            "стоит <code>studio.embedded: false</code> — запустите её "
+            "вторым окном:\n<code>python -m studio</code>",
+            parse_mode="HTML")
         return
 
     link = review.make_link(proj.job_id, message.from_user.id, cfg)

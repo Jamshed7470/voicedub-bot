@@ -186,7 +186,11 @@ studio:
   link_ttl_hours: 72            # сколько живёт подписанная ссылка на проект
   project_retention_days: 7     # столько дней задача открывается в студии для правок
   report_retention_days: 30     # project.json и отчёт живут дольше медиа
-  embedded: false               # true — поднимать студию в процессе бота
+  embedded: true                # студия работает внутри процесса бота.
+                                # false — запускать отдельно (python -m studio),
+                                # но тогда за её жизнью следит человек: закрытое
+                                # окно превращает ссылки из бота в «не удаётся
+                                # получить доступ к сайту» без объяснений
 
 speaker_identity:
   embedding_model: speechbrain/spkrec-ecapa-voxceleb
