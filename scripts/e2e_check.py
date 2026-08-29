@@ -1,11 +1,18 @@
 """Сквозной прогон: видео → пайплайн → студия → утверждение → результат.
 
+    python -m scripts.e2e_check [видео] [язык]
+
+Поднимает студию, гонит задачу через настоящие модели и изображает
+человека: дожидается паузы на проверку, читает проект через API, правит
+реплику, утверждает — и проверяет, что правка дошла до озвучки.
+
 Проверяется всё вместе, на настоящих моделях: распознавание, сведение
 спикеров, фиксация профилей, кастинг, пауза на проверку, утверждение
 через API студии, синтез с Identity QC, микс и сборка.
 
-Исходник — фикстура с ИЗВЕСТНЫМ ответом (2 голоса), поэтому в конце можно
-сказать не «сработало», а «сработало правильно».
+Исходник по умолчанию — фикстура с ИЗВЕСТНЫМ ответом (2 голоса), поэтому
+в конце можно сказать не «сработало», а «сработало правильно».
+Собрать фикстуры: python -m scripts.make_fixtures
 """
 from __future__ import annotations
 
@@ -19,15 +26,18 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-ROOT = Path(r"C:\Users\jamsh\Desktop\bot telegram\voicedub")
+ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 import os
 os.chdir(ROOT)
 
-VIDEO = Path(sys.argv[1] if len(sys.argv) > 1 else "e2e_test.mp4")
-JOB_ID = "e2efull01"
+VIDEO = Path(sys.argv[1] if len(sys.argv) > 1
+             else "tests/fixtures/dialog/audio.wav")
+TARGET_LANG = sys.argv[2] if len(sys.argv) > 2 else "en"
+JOB_ID = "e2echeck"
 PORT = 8097
-SECRET = "e2e-full-run-secret-0123456789abcdefghijklmn"
+# секрет только для этой проверки: настоящий STUDIO_SECRET из .env не трогаем
+SECRET = "e2e-check-secret-0123456789abcdefghijklmnop"
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -64,7 +74,7 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 class Job:
     kind = "local"
-    target_lang = "en"          # ru → en: перевод тоже участвует
+    target_lang = TARGET_LANG   # ru → en по умолчанию: перевод тоже участвует
     id = JOB_ID
     user_id = 777
     chat_id = 777
@@ -263,7 +273,10 @@ async def main() -> int:
         # норма зависит от языка: замер на материале с заведомо одним
         # голосом даёт 0.78 при озвучке на языке оригинала и заметно
         # меньше при межъязыковой — выше этого не поднимется ничто
-        target = 0.60          # ru → en, межъязыковой случай
+        # норма зависит от языка: замер на материале с заведомо одним
+        # голосом даёт 0.78 по репликам от 3 с при озвучке на языке
+        # оригинала и заметно меньше при межъязыковой
+        target = 0.75 if TARGET_LANG == "ru" else 0.60
         check(f"стабильность голосов >= {target}",
               bool(stability and stability >= target),
               f"{stability}" if stability else "не найдена в отчёте")
