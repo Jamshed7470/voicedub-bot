@@ -89,6 +89,8 @@ function TopBar({ wsAlive }: { wsAlive: boolean }) {
         </span>
         <span className="text-xs text-muted">· {speakers.length} спикеров</span>
 
+        <RangePreviewButton />
+
         <button onClick={() => openDrawer({ kind: "qc" })}
                 className={`text-xs px-2 py-1 rounded ${
                   project.warnings_count ? "text-warn hover:bg-ink-600"
@@ -119,6 +121,81 @@ function TopBar({ wsAlive }: { wsAlive: boolean }) {
       <Progress />
     </>
   );
+}
+
+function RangePreviewButton() {
+  const preview = useProject((s) => s.rangePreview);
+  const previewRange = useProject((s) => s.previewRange);
+  const playhead = useProject((s) => s.playhead);
+
+  // Главный вопрос человека на этом экране — «правильно ли он озвучивает».
+  // Отдельные реплики отвечают на него плохо: нужно услышать дубляж
+  // поверх картинки. До полного рендера это единственный способ.
+  const play = () => {
+    const video = (window as unknown as { __player?: HTMLVideoElement }).__player;
+    const audio = document.getElementById("range-audio") as HTMLAudioElement | null;
+    if (!audio || !preview.url) return;
+    audio.currentTime = 0;
+    if (video) {
+      video.pause();
+      video.currentTime = preview.start;
+      video.muted = true;          // оригинал заглушается: слушаем дубляж
+      void video.play().catch(() => undefined);
+    }
+    void audio.play().catch(() => undefined);
+  };
+
+  const stop = () => {
+    const video = (window as unknown as { __player?: HTMLVideoElement }).__player;
+    const audio = document.getElementById("range-audio") as HTMLAudioElement | null;
+    audio?.pause();
+    if (video) { video.pause(); video.muted = false; }
+  };
+
+  if (preview.status === "working") {
+    return (
+      <span className="text-xs text-warn px-2 py-1">
+        озвучиваю отрывок… ≈1 мин
+      </span>
+    );
+  }
+
+  if (preview.status === "ready" && preview.url) {
+    return (
+      <span className="flex items-center gap-1.5">
+        <audio id="range-audio" src={preview.url} onEnded={stop} />
+        <button onClick={play}
+                className="text-xs px-2.5 py-1 rounded bg-ok/20 text-ok
+                           hover:bg-ok/30 font-medium">
+          ▶ Дубляж {fmtClock(preview.start)}–{fmtClock(preview.end)}
+        </button>
+        <button onClick={stop} title="Остановить и вернуть оригинал"
+                className="text-xs px-2 py-1 rounded hover:bg-ink-600 text-muted">
+          ■
+        </button>
+        <button onClick={() => void previewRange(Math.floor(playhead))}
+                title="Озвучить отрывок с текущего места"
+                className="text-xs px-2 py-1 rounded hover:bg-ink-600 text-muted">
+          ↻
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => void previewRange(Math.floor(playhead))}
+      title="Синтезировать минуту дубляжа с текущего места и послушать её поверх видео"
+      className="text-xs px-2.5 py-1 rounded bg-ink-600 hover:bg-ink-500">
+      🔊 Послушать озвучку
+    </button>
+  );
+}
+
+function fmtClock(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
 }
 
 function ApproveDialog({ onClose, onConfirm }: {

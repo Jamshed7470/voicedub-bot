@@ -29,6 +29,12 @@ interface State {
   playhead: number;
   previewing: Set<number>;
   progress: { stage: number; label: string; pct: number } | null;
+  // озвучка отрывка: до полного рендера это единственный способ услышать,
+  // как дубляж ложится на картинку
+  rangePreview: {
+    status: "idle" | "working" | "ready" | "failed";
+    start: number; end: number; url: string | null;
+  };
 
   load: () => Promise<void>;
   refresh: () => Promise<void>;
@@ -48,6 +54,7 @@ interface State {
   splitSegment: (id: number, at: number) => Promise<void>;
   mergeWithNext: (id: number) => Promise<void>;
   preview: (id: number) => Promise<void>;
+  previewRange: (start: number) => Promise<void>;
   approve: () => Promise<void>;
   undo: () => Promise<void>;
   applyEvent: (e: Record<string, unknown>) => void;
@@ -67,6 +74,7 @@ export const useProject = create<State>((set, get) => ({
   playhead: 0,
   previewing: new Set(),
   progress: null,
+  rangePreview: { status: "idle", start: 0, end: 0, url: null },
 
   load: async () => {
     set({ loading: true, error: null });
@@ -245,6 +253,20 @@ export const useProject = create<State>((set, get) => ({
     }
   },
 
+  previewRange: async (start) => {
+    const project = get().project;
+    if (!project) return;
+    const end = Math.min(start + 60, project.source.duration_sec);
+    set({ rangePreview: { status: "working", start, end, url: null },
+          notice: "Озвучиваю отрывок — это займёт около минуты" });
+    try {
+      await api.previewRange(start, end);
+    } catch (e) {
+      set({ rangePreview: { status: "failed", start, end, url: null },
+            notice: (e as Error).message });
+    }
+  },
+
   approve: async () => {
     const project = get().project;
     if (!project) return;
@@ -275,6 +297,13 @@ export const useProject = create<State>((set, get) => ({
     if (type === "progress") {
       set({ progress: { stage: Number(e.stage), label: String(e.label),
                         pct: Number(e.pct) } });
+    } else if (type === "preview_ready" && e.kind === "range") {
+      const token = new URLSearchParams(window.location.search).get("t") ?? "";
+      set((st) => ({
+        rangePreview: { ...st.rangePreview, status: "ready",
+                        url: `${e.url}?t=${encodeURIComponent(token)}` },
+        notice: "Отрывок озвучен — включаю",
+      }));
     } else if (type === "preview_ready") {
       const id = Number(e.ref);
       set((st) => {
@@ -286,6 +315,11 @@ export const useProject = create<State>((set, get) => ({
       const audio = new Audio(String(e.url) + `?t=${encodeURIComponent(
         new URLSearchParams(window.location.search).get("t") ?? "")}`);
       void audio.play().catch(() => undefined);
+    } else if (type === "preview_failed" && e.ref === "range") {
+      set((st) => ({
+        rangePreview: { ...st.rangePreview, status: "failed" },
+        notice: `Не удалось озвучить отрывок: ${e.error}`,
+      }));
     } else if (type === "preview_failed") {
       set((st) => {
         const p = new Set(st.previewing);
