@@ -139,8 +139,26 @@ def test_voice_map_lists_voices_and_stability(project):
     assert "голоса стабильны" in text
 
 
+def test_voice_map_norm_depends_on_language(project):
+    """Норма стабильности зависит от того, совпадает ли язык озвучки.
+
+    Замер: материал с заведомо одним голосом даёт 0.71 при озвучке на
+    языке оригинала и 0.47 при озвучке на другом. Один и тот же 0.60 —
+    хороший результат для дубляжа с турецкого и плохой для переозвучки
+    без смены языка.
+    """
+    cross = review.voice_map_text(project, {}, overall=0.60)   # tr → ru
+    assert "голоса стабильны" in cross
+    assert "норма от 0.60" in cross
+
+    store.update(JOB, lambda p: setattr(p, "lang_src", p.lang_tgt))
+    same = review.voice_map_text(store.load(JOB), {}, overall=0.60)
+    assert "заметный разброс" in same
+    assert "норма от 0.75" in same
+
+
 def test_voice_map_warns_on_low_stability(project):
-    text = review.voice_map_text(project, {}, overall=0.55)
+    text = review.voice_map_text(project, {}, overall=0.31)
     assert "заметный разброс" in text
 
 

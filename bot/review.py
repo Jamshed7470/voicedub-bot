@@ -170,7 +170,11 @@ def voice_map_text(proj: Project, report: dict | None = None,
         lines.append(f"…и ещё {len(speakers) - 15} спикеров")
 
     if overall:
-        verdict = ("голоса стабильны" if overall >= 0.75
+        # норма зависит от того, совпадает ли язык озвучки с языком оригинала:
+        # при межъязыковом дубляже 0.6 — это хорошо, а не плохо
+        target = 0.75 if proj.lang_src == proj.lang_tgt else 0.60
+        verdict = ("голоса стабильны" if overall >= target
                    else "есть заметный разброс — проверьте в студии")
-        lines += ["", f"<b>Стабильность голосов: {overall:.2f}</b> — {verdict}"]
+        lines += ["", f"<b>Стабильность голосов: {overall:.2f}</b> — {verdict} "
+                      f"(норма от {target:.2f})"]
     return "\n".join(lines)

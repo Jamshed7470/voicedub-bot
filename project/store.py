@@ -243,6 +243,51 @@ def from_pipeline(job_id: str, segments: list[dict], speakers: dict,
     return save(proj)
 
 
+def save_render_results(job_id: str, segments: list[dict], stats,
+                        stage: Stage = Stage.DONE,
+                        result_path: str | None = None) -> Project | None:
+    """Переносит результаты озвучки в проект: статус QC и карту голосов.
+
+    Без этого шага студия после рендера показывает реплики как «ещё не
+    озвучены»: она читает только project.json, а рендер работает со
+    словарями пайплайна. Тогда фильтр «Тембр не совпал» ничего не находит,
+    и пересинтезировать проблемные реплики человеку нечем (INV-4).
+    """
+    from project.schema import IdentityReport, SynthInfo
+
+    if not exists(job_id):
+        return None
+    by_id = {int(seg["id"]): seg for seg in segments}
+
+    def mutate(proj: Project) -> None:
+        for item in proj.segments:
+            src = by_id.get(item.id)
+            if not src:
+                continue
+            synth = src.get("synth")
+            if isinstance(synth, dict):
+                item.synth = SynthInfo(**{k: v for k, v in synth.items()
+                                          if k in SynthInfo.model_fields})
+            flags = set(item.flags) | set(src.get("flags") or [])
+            item.flags = sorted(flags)
+            if src.get("text_tts"):
+                item.text_tts = src["text_tts"]
+
+        report = getattr(stats, "per_speaker_report", None) or {}
+        proj.qc.identity_report = {
+            sid: IdentityReport(**rec) for sid, rec in report.items()}
+        proj.qc.overall_identity = float(getattr(stats, "overall_identity", 0.0))
+        proj.stage = stage
+        if result_path:
+            proj.result_path = result_path
+
+    try:
+        return update(job_id, mutate)
+    except (ProjectNotFound, VersionConflict):
+        log.warning("Итоги рендера не записаны в проект %s", job_id)
+        return None
+
+
 # ---------------------------------------------------------------- обслуживание
 
 def purge(keep_media_days: int = 7, keep_report_days: int = 30) -> int:

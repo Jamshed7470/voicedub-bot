@@ -75,19 +75,62 @@ def load_transcript(analysis: Path) -> dict:
         return json.load(f)
 
 
+# Все поля speakers.json, в которых лежит путь внутрь speakers/<id>/.
+# Папка целиком переезжает в кэш, поэтому каждый такой путь надо переписать.
+# Забытое поле не даёт ошибки при чтении — оно молча указывает в никуда, и
+# задача падает много позже, уже на синтезе. Поэтому список явный.
+PROFILE_PATH_FIELDS = (
+    ("ref_main",),
+    ("reference", "path"),
+    ("voice", "profile_path"),
+    ("voice", "identity_path"),
+    ("centroid_path",),
+)
+
+
 def load_profiles(analysis: Path) -> dict:
     """Профили спикеров с путями, переписанными на папку кэша."""
     with open(analysis / "speakers.json", encoding="utf-8") as f:
         profiles = json.load(f)
     spk_root = analysis / "speakers"
+
     for spk, prof in profiles.items():
-        if prof.get("ref_main"):
-            prof["ref_main"] = str(spk_root / spk / Path(prof["ref_main"]).name)
-        prof["refs_emotion"] = {
-            emo: str(spk_root / spk / Path(p).name)
-            for emo, p in prof.get("refs_emotion", {}).items()
-        }
+        for field in PROFILE_PATH_FIELDS:
+            node = prof
+            for key in field[:-1]:
+                node = node.get(key) if isinstance(node, dict) else None
+                if node is None:
+                    break
+            if not isinstance(node, dict):
+                continue
+            value = node.get(field[-1])
+            if value:
+                node[field[-1]] = str(spk_root / spk / Path(value).name)
+
+        # эмоциональные референсы остались в старых кэшах версии 1
+        if prof.get("refs_emotion"):
+            prof["refs_emotion"] = {
+                emo: str(spk_root / spk / Path(p).name)
+                for emo, p in prof["refs_emotion"].items()
+            }
     return profiles
+
+
+def verify_profiles(profiles: dict) -> bool:
+    """Все ли файлы профилей на месте после переезда в кэш.
+
+    Проверка нужна здесь, а не при синтезе: там до неё дело дойдёт через
+    десятки минут работы, и причина будет уже не видна.
+    """
+    missing = []
+    for spk, prof in profiles.items():
+        path = ((prof.get("voice") or {}).get("profile_path"))
+        if path and not Path(path).exists():
+            missing.append(spk)
+    if missing:
+        log.warning("Кэш: у спикеров %s нет файлов профиля — пересоберу разбор",
+                    ", ".join(missing))
+    return not missing
 
 
 def store_media(job_dir: Path, key: str) -> Path | None:

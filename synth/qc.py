@@ -120,14 +120,38 @@ def _asr_lang(lang: str) -> str:
 
 # ---------------------------------------------------------------- проверка
 
+def threshold_for(profile, cfg, cross_lingual: bool) -> float:
+    """Порог сходства тембра для этого профиля и этого языка.
+
+    Замер на фикстуре (профиль из 22 с русской речи, эталон — тот же голос):
+
+        оригинальная речь против своего профиля   0.713   (потолок)
+        синтез на языке профиля                   0.704
+        синтез на другом языке                    0.470
+
+    Единый порог 0.70 означал бы, что при дубляже с турецкого на русский
+    проверку не проходит ничего: XTTS переносит тембр между языками с
+    заметной потерей — это свойство движка, а не сбой. Тогда каждая реплика
+    синтезировалась бы трижды впустую и помечалась как испорченная, а
+    настоящий уплывший голос терялся бы среди ложных срабатываний.
+    """
+    base = ("identity_qc_min_clone" if profile.mode == "clone"
+            else "identity_qc_min_preset")
+    key = base + ("_cross" if cross_lingual else "")
+    fallback = {
+        "identity_qc_min_clone": 0.60, "identity_qc_min_clone_cross": 0.38,
+        "identity_qc_min_preset": 0.65, "identity_qc_min_preset_cross": 0.42,
+    }[key]
+    return float(cfg.y("synthesis", key, default=fallback))
+
+
 def check(wav_path: str | Path, text: str, lang: str, profile,
           expected_dur: float, embedder, cfg,
-          with_backcheck: bool = True) -> QCResult:
+          with_backcheck: bool = True, cross_lingual: bool = False) -> QCResult:
     """Полная проверка одной синтезированной реплики."""
     reasons: list[str] = []
 
-    threshold = float(cfg.y("synthesis", profile.qc_threshold_key,
-                            default=0.70 if profile.mode == "clone" else 0.75))
+    threshold = threshold_for(profile, cfg, cross_lingual)
     sim = identity_similarity(wav_path, profile, embedder)
     if sim < threshold:
         reasons.append(f"тембр {sim:.2f} < {threshold:.2f}")

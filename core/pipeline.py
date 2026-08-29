@@ -276,7 +276,14 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
         stored = await asyncio.to_thread(source_cache.store_analysis, job_dir,
                                          src_key, spk_hint)
         if stored:
-            profiles = source_cache.load_profiles(stored)
+            cached_profiles = source_cache.load_profiles(stored)
+            # профили переехали в кэш вместе с папкой speakers/: пути в них
+            # переписаны, но проверить это надо СЕЙЧАС, а не на синтезе через
+            # полчаса, когда причина уже не видна
+            if source_cache.verify_profiles(cached_profiles):
+                profiles = cached_profiles
+            else:
+                log.warning("Кэш разбора неполон — работаю с профилями задачи")
 
     # ---------- 7. Перевод ----------
     await report(7)
@@ -348,12 +355,20 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
             job_dir, segments, profiles, cfg, get_engine(cfg),
             get_embedder(cfg), tgt_lang, job.id, translator=translator,
             bank=bank, progress=report_ts(9),
-            cancel_event=hooks.cancel_event)
+            cancel_event=hooks.cancel_event, lang_src=src_lang)
 
     placed, render_stats = await asyncio.to_thread(_stage9)
     _save_json(job_dir / "speakers.json", profiles)
     render_mod.write_report(job_dir, profiles, render_stats, src_lang, tgt_lang)
     log.info("Стабильность голосов: %.2f", render_stats.overall_identity)
+
+    # итоги озвучки — в проект: иначе студия покажет реплики как
+    # неозвученные, и пересинтезировать проблемные будет нечем (INV-4)
+    from project import store as project_store
+    from project.schema import Stage as ProjectStage
+
+    await asyncio.to_thread(project_store.save_render_results, job.id, segments,
+                            render_stats, ProjectStage.MIXING)
 
     # ---------- 10. Микс и сборка ----------
     await report(10)
@@ -400,6 +415,8 @@ async def run_job(job, bot, hooks: PipelineHooks, cfg) -> JobResult:
             return None, saved, srt, saved_srt, parts
 
     output_path, saved_path, srt_path, saved_srt, parts = await asyncio.to_thread(_stage10)
+    await asyncio.to_thread(project_store.save_render_results, job.id, segments,
+                            render_stats, ProjectStage.DONE, str(saved_path))
 
     elapsed = time.monotonic() - t0
     summary = _build_summary(src_lang, tgt_lang, profiles, elapsed)

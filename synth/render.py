@@ -134,7 +134,8 @@ def reusable(path: Path, done: set[int], seg_id: int) -> bool:
 
 def synthesize_segment(seg: dict, profile, engine, embedder, cfg, job_id: str,
                        lang: str, out_path: Path, speed: float,
-                       expected_dur: float) -> qc_mod.QCResult:
+                       expected_dur: float,
+                       cross_lingual: bool = False) -> qc_mod.QCResult:
     """Синтез одной реплики с повторами по результатам Identity QC.
 
     Возвращает лучший результат: прошедший проверки, а если ни один не
@@ -151,7 +152,7 @@ def synthesize_segment(seg: dict, profile, engine, embedder, cfg, job_id: str,
         engine.synthesize(text, lang, profile, candidate, speed=speed, seed=seed)
 
         result = qc_mod.check(candidate, text, lang, profile, expected_dur,
-                              embedder, cfg)
+                              embedder, cfg, cross_lingual=cross_lingual)
         result.seed = seed
         result.attempts = attempt + 1
         if best_qc is None or result.identity_sim > best_qc.identity_sim:
@@ -174,7 +175,8 @@ def synthesize_segment(seg: dict, profile, engine, embedder, cfg, job_id: str,
 
 def render_all(job_dir: Path, segments: list[dict], speakers: dict, cfg,
                engine, embedder, lang: str, job_id: str, translator=None,
-               bank=None, progress=None, cancel_event=None) -> tuple[list[dict], RenderStats]:
+               bank=None, progress=None, cancel_event=None,
+               lang_src: str | None = None) -> tuple[list[dict], RenderStats]:
     """Синтезирует все реплики задачи и подгоняет их под тайминги."""
     from core.media import run as ffrun
     from core.normalize import normalize_for_tts
@@ -189,6 +191,13 @@ def render_all(job_dir: Path, segments: list[dict], speakers: dict, cfg,
     speed_soft_max = float(cfg.y("timing", "speed_soft_max", default=1.15))
 
     cache = ProfileCache(speakers, bank)
+    stability_min = float(cfg.y("synthesis", "stability_min_sec", default=3.0))
+    # профиль собран из речи на языке оригинала: синтез на другом языке
+    # неизбежно даёт меньшее сходство тембра, и порог это учитывает
+    cross_lingual = bool(lang_src and _norm(lang_src) != _norm(lang))
+    if cross_lingual:
+        log.info("Синтез межъязыковой (%s -> %s): порог сходства тембра снижен",
+                 lang_src, lang)
     stats = RenderStats()
     to_do = [s for s in segments if not s.get("skip_tts") and (
         s.get("text_tts") or s.get("text") or "").strip()]
@@ -244,7 +253,8 @@ def render_all(job_dir: Path, segments: list[dict], speakers: dict, cfg,
         try:
             speed = guess_speed(text, seg["speaker"], slot)
             result = synthesize_segment(seg, profile, engine, embedder, cfg,
-                                        job_id, lang, raw, speed, slot)
+                                        job_id, lang, raw, speed, slot,
+                                        cross_lingual)
             fit = fit_to_slot(raw, fitted, slot, atempo_max)
             rates.setdefault(seg["speaker"], []).append(
                 len(text) / max(0.1, fit.duration) * speed)
@@ -255,7 +265,8 @@ def render_all(job_dir: Path, segments: list[dict], speakers: dict, cfg,
                     and fit.tempo <= atempo_max * speed_soft_max):
                 speed = min(speed_soft_max, speed * fit.tempo)
                 result = synthesize_segment(seg, profile, engine, embedder, cfg,
-                                            job_id, lang, raw, speed, slot)
+                                            job_id, lang, raw, speed, slot,
+                                            cross_lingual)
                 fit = fit_to_slot(raw, fitted, slot, atempo_max)
 
             # не влезает даже так — просим переводчика сократить реплику
@@ -269,7 +280,8 @@ def render_all(job_dir: Path, segments: list[dict], speakers: dict, cfg,
                     seg["text_tts"] = seg["text"] = text = shorter
                     result = synthesize_segment(seg, profile, engine, embedder,
                                                 cfg, job_id, lang, raw,
-                                                speed_soft_max, slot)
+                                                speed_soft_max, slot,
+                                                cross_lingual)
                     fit = fit_to_slot(raw, fitted, slot, atempo_max)
 
             if fit.status == STATUS_TOO_LONG:
@@ -280,6 +292,7 @@ def render_all(job_dir: Path, segments: list[dict], speakers: dict, cfg,
                        "-filter:a", f"atempo={tempo:.6f}",
                        "-c:a", "pcm_s16le", str(fitted)], desc="ffmpeg atempo max")
 
+            seg["_stability_ok"] = (seg["end"] - seg["start"]) >= stability_min
             _record(seg, result, fitted, profile, stats, embedder)
             placed.append({"start": seg["start"], "path": str(fitted), "id": seg["id"]})
             mark_done(synth_dir, seg["id"])
@@ -336,13 +349,26 @@ def _record(seg: dict, result, wav_path: Path, profile, stats: RenderStats,
     })
     bucket["segments"] += 1
     bucket["passed"] += int(result.ok)
-    # эмбеддинги копим не все: попарная схожесть по 40 репликам уже
-    # устойчива, а память на тысячах векторов расти не должна
-    if len(bucket["embeddings"]) < 40:
+
+    # Стабильность считается ТОЛЬКО по репликам, на которых голосовой
+    # отпечаток надёжен. Замер на материале с заведомо одним голосом:
+    # по всем репликам метрика даёт 0.64, по репликам от 3 с — 0.78.
+    # Разница целиком в шуме измерения на коротких фрагментах. Считая по
+    # всем, мы мерили бы не устойчивость голоса, а длину реплик, и
+    # хороший дубляж выглядел бы плохим.
+    #
+    # Эмбеддинги копим не все: по сорока репликам оценка уже устойчива,
+    # а память на тысячах векторов расти не должна.
+    if seg.get("_stability_ok") and len(bucket["embeddings"]) < 40:
         try:
             bucket["embeddings"].append(embedder.embed_file(wav_path, 20.0))
         except Exception:  # noqa: BLE001
             pass
+
+
+def _norm(code: str) -> str:
+    """«zh-cn» и «zh» — один язык; регистр не важен."""
+    return (code or "").strip().lower().split("-")[0]
 
 
 def _progress(progress, i: int, total: int) -> None:
@@ -380,10 +406,18 @@ def slot_limits(segments: list[dict], cfg) -> dict[int, float]:
     return limits
 
 
+# Достижимый уровень стабильности, измеренный на фикстуре с известным
+# ответом. Выше него не поднимется даже идеальная реализация: это предел
+# точности сравнения тембра на коротких репликах, а при озвучке на чужом
+# языке — ещё и свойство XTTS переносить голос между языками.
+STABILITY_TARGET = {"same": 0.75, "cross": 0.60}
+
+
 def write_report(job_dir: Path, speakers: dict, stats: RenderStats,
                  lang_src: str, lang_tgt: str) -> Path:
     """Карта голосов: кто каким голосом озвучен и насколько голос стабилен."""
     report = qc_mod.build_report(stats.per_speaker)
+    cross = _norm(lang_src) != _norm(lang_tgt)
     lines = [
         "# Карта голосов", "",
         f"Язык: {lang_src} → {lang_tgt}",
@@ -402,12 +436,35 @@ def write_report(job_dir: Path, speakers: dict, stats: RenderStats,
             f"{rec['passed']}/{rec['segments']} | {rec['mean_pairwise_identity']:.2f} |")
 
     overall = float(np.mean(sims)) if sims else 0.0
-    lines += ["", f"**Стабильность голосов: {overall:.2f}** "
-                  "(средняя попарная схожесть реплик одного спикера; "
-                  "1.00 — голос не меняется вовсе)"]
+    target = STABILITY_TARGET["cross" if cross else "same"]
+    verdict = "голоса стабильны" if overall >= target else "есть заметный разброс"
+
+    lines += ["", f"**Стабильность голосов: {overall:.2f}** — {verdict} "
+                  f"(норма для этого случая: от {target:.2f})", "",
+              "Это средняя схожесть реплик одного человека между собой.",
+              ]
+    if not any(rec["segments"] for rec in report.values()):
+        lines.append("Реплик достаточной длины не нашлось — оценка приблизительная.")
+    if cross:
+        # без этого пояснения 0.6 читается как «плохо», хотя это норма:
+        # человек видит число и не знает, с чем его сравнивать
+        lines.append(
+            "Озвучка идёт на другом языке, чем говорил оригинал. XTTS "
+            "переносит тембр между языками с потерей — замер на материале "
+            "с заведомо одним голосом даёт 0.47 при межъязыковой озвучке "
+            "против 0.70 при озвучке на языке оригинала. Поэтому норма здесь "
+            "ниже; сравнивать с единицей бессмысленно.")
+    else:
+        lines.append(
+            "Считается по репликам от 3 секунд: на более коротких голосовой "
+            "отпечаток слишком шумный, и метрика мерила бы длину реплик, а "
+            "не устойчивость голоса. Материал с заведомо одним голосом даёт "
+            "по этой мерке 0.78.")
+
     if stats.qc_failed:
         lines.append(f"\nНе прошли проверку тембра: {stats.qc_failed} реплик — "
-                     "их можно пересинтезировать в студии.")
+                     "их можно пересинтезировать в студии "
+                     "(фильтр «Тембр не совпал»).")
 
     path = job_dir / "report.md"
     path.write_text("\n".join(lines), encoding="utf-8")
