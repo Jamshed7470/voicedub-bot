@@ -50,6 +50,9 @@ class Config:
     openrouter_api_key: str = ""
     telegram_local_api_url: str = ""
     telegram_local_files_dir: str = ""  # где сервер складывает файлы (со стороны Windows)
+    studio_enabled: bool = False
+    studio_secret: str = ""
+    studio_public_url: str = ""
     device: str = "cpu"
     profile: str = "full"
     yaml: dict[str, Any] = field(default_factory=dict)
@@ -117,6 +120,35 @@ class Config:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    # ---- Studio ----
+    @property
+    def studio_on(self) -> bool:
+        """Студия проверки включена: и .env, и config.yaml должны разрешать.
+
+        Флаг выключает ТОЛЬКО точку проверки человеком. Фиксированные профили
+        голоса и Identity QC работают всегда — иначе главный баг (один
+        человек несколькими голосами) остался бы у всех, кто студию не включил.
+        """
+        return bool(self.studio_enabled and self.y("studio", "enabled", default=True))
+
+    @property
+    def studio_host(self) -> str:
+        return str(self.y("studio", "host", default="0.0.0.0"))
+
+    @property
+    def studio_port(self) -> int:
+        return int(self.y("studio", "port", default=8080))
+
+    @property
+    def studio_url(self) -> str:
+        """Адрес, который попадёт в ссылку в Telegram."""
+        url = self.studio_public_url or str(self.y("studio", "public_url", default=""))
+        return (url or f"http://localhost:{self.studio_port}").rstrip("/")
+
+    @property
+    def studio_link_ttl_h(self) -> int:
+        return int(self.y("studio", "link_ttl_hours", default=72))
+
     def speech_rate(self, lang: str) -> float:
         rates = self.y("speech_rate_chars_per_s", default={}) or {}
         return float(rates.get(lang, 14))
@@ -164,6 +196,10 @@ def load_config() -> Config:
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
         telegram_local_api_url=os.getenv("TELEGRAM_LOCAL_API_URL", "").strip(),
         telegram_local_files_dir=os.getenv("TELEGRAM_LOCAL_FILES_DIR", "").strip(),
+        studio_enabled=os.getenv("STUDIO_ENABLED", "false").strip().lower()
+        in ("1", "true", "yes", "on", "да"),
+        studio_secret=os.getenv("STUDIO_SECRET", "").strip(),
+        studio_public_url=os.getenv("STUDIO_PUBLIC_URL", "").strip(),
         device=_resolve_device(os.getenv("DEVICE", "auto")),
         profile=profile,
         yaml=yaml_cfg,

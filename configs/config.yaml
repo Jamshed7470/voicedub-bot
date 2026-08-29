@@ -175,3 +175,61 @@ cache:
 diarization:
   max_speakers: 60              # верхняя граница в режиме «авто» (в банке 54 голоса; фильм даёт 20-30+ спикеров)
   clustering_threshold: null    # ниже 0.7 — охотнее разделяет похожие голоса (null: как у pyannote)
+
+# ============ Studio v2: идентичность голоса и проверка человеком ============
+
+studio:
+  enabled: true                 # общий выключатель; в .env нужен ещё STUDIO_ENABLED=true
+  host: 0.0.0.0
+  port: 8080
+  public_url: ""                # внешний адрес для ссылки в Telegram; пусто — localhost
+  link_ttl_hours: 72            # сколько живёт подписанная ссылка на проект
+  project_retention_days: 7     # столько дней задача открывается в студии для правок
+  report_retention_days: 30     # project.json и отчёт живут дольше медиа
+  embedded: false               # true — поднимать студию в процессе бота
+
+speaker_identity:
+  embedding_model: speechbrain/spkrec-ecapa-voxceleb
+  min_segment_sec_for_embedding: 0.8   # короче — эмбеддинг по окну ±0.3 с и флаг
+  merge_threshold: 0.72         # косинус центроидов, выше — кластеры это один человек
+  overlap_merge_block_sec: 2.0  # столько одновременной речи запрещает слияние
+  min_assign_sim: 0.55          # ниже — сегмент не переприсваивается
+  reassign_margin: 0.08         # запас до второго кандидата, иначе low_speaker_conf
+  rounds: 2                     # итераций переприсваивания с пересчётом центроидов
+  registry_match_threshold: 0.75  # сопоставление ID при повторной диаризации
+  embedding_batch: 32           # сегментов за один прогон ECAPA
+  isolated_max_sec: 1.5         # короткий одиночный сегмент внутри чужой серии
+  isolated_margin: 0.05         # ...с margin ниже — не переворачивать, а пометить
+  overlap_ratio: 0.3            # доля длины сегмента с двумя спикерами → overlap
+
+voice_profile:
+  target_ref_sec: 25            # столько чистой речи собираем в референс
+  min_ref_sec_for_clone: 8      # меньше — клон запрещён, голос берётся из банка
+  min_snr_db: 15                # кандидат тише этого в референс не идёт
+  loudness_lufs: -23            # нормализация громкости референса
+  min_candidate_sec: 1.5        # минимальная длина сегмента-кандидата
+  min_candidate_conf: 0.8       # минимальная уверенность привязки к спикеру
+  join_silence_sec: 0.2         # пауза между склеенными кусками референса
+
+emotion:
+  emotion_subprofiles: false    # эмоциональные под-профили выключены по умолчанию
+  subprofile_min_sec: 6         # столько речи в эмоции нужно для под-профиля
+  subprofile_identity_min: 0.85 # ...и такое сходство тембра с основным профилем
+
+synthesis:
+  temperature: 0.55
+  max_chars_per_call: 220       # длиннее — режем по предложениям и склеиваем
+  identity_qc_min_clone: 0.70   # порог сходства с эталоном для клона
+  identity_qc_min_preset: 0.75  # ...и для пресета из банка
+  duration_ratio_range: [0.5, 2.5]
+  asr_backcheck: true           # обратное распознавание ловит «кашу» XTTS
+  asr_backcheck_max_cer: 0.35
+  asr_backcheck_model: small
+  max_retries: 3                # попыток пересинтеза с новым seed
+  chunk_join_sec: 0.12          # пауза при склейке частей длинной реплики
+
+casting:
+  default_mode: auto            # clone | preset | auto
+  unique_voices: true           # два спикера никогда не получают один пресет
+  language_bonus: 0.05          # прибавка кандидату, знающему язык задачи
+  candidates_top_n: 3           # столько вариантов показывается в «Кастинге»
