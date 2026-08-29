@@ -113,7 +113,8 @@ def stability(job_id: str) -> str:
         return "—"
     for line in report.read_text(encoding="utf-8").split("\n"):
         if "Стабильность голосов" in line:
-            return line.split(":")[1].split("**")[0].strip()
+            value = line.split(":")[1].split("**")[0].strip()
+            return value or "—"
     return "—"
 
 

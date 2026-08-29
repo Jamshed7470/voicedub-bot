@@ -439,25 +439,39 @@ def write_report(job_dir: Path, speakers: dict, stats: RenderStats,
         "|---|---|---|---|---|---|",
     ]
     sims = []
+    unmeasured = 0
     for sid, rec in sorted(report.items(), key=lambda kv: -kv[1]["segments"]):
         info = speakers.get(sid, {})
         name = info.get("name") or info.get("label") or sid
         gender = {"male": "♂", "female": "♀"}.get(info.get("gender"), "?")
-        sims.append(rec["mean_pairwise_identity"])
+        value = rec["mean_pairwise_identity"]
+        if value == value:            # не nan
+            sims.append(value)
+            shown = f"{value:.2f}"
+        else:
+            unmeasured += 1
+            shown = "мало реплик"
         lines.append(
             f"| {sid} {name} | {gender} | {rec['voice']} | {rec['segments']} | "
-            f"{rec['passed']}/{rec['segments']} | {rec['mean_pairwise_identity']:.2f} |")
+            f"{rec['passed']}/{rec['segments']} | {shown} |")
 
-    overall = float(np.mean(sims)) if sims else 0.0
     target = STABILITY_TARGET["cross" if cross else "same"]
-    verdict = "голоса стабильны" if overall >= target else "есть заметный разброс"
 
-    lines += ["", f"**Стабильность голосов: {overall:.2f}** — {verdict} "
-                  f"(норма для этого случая: от {target:.2f})", "",
-              "Это средняя схожесть реплик одного человека между собой.",
-              ]
-    if not any(rec["segments"] for rec in report.values()):
-        lines.append("Реплик достаточной длины не нашлось — оценка приблизительная.")
+    if overall != overall:            # nan: измерять было не на чем
+        lines += ["", "**Стабильность голосов: не измерена** — в ролике не "
+                      "нашлось спикеров с двумя репликами от 3 секунд.", "",
+                  "Это не значит, что дубляж плохой: значит, что проверить "
+                  "устойчивость голоса было не на чем. Короткие ролики с "
+                  "репликами по паре слов обычно так и выглядят."]
+    else:
+        verdict = ("голоса стабильны" if overall >= target
+                   else "есть заметный разброс")
+        lines += ["", f"**Стабильность голосов: {overall:.2f}** — {verdict} "
+                      f"(норма для этого случая: от {target:.2f})", "",
+                  "Это средняя схожесть реплик одного человека между собой."]
+    if unmeasured:
+        lines.append(f"У {unmeasured} спикеров реплик слишком мало — их "
+                     "устойчивость не измерялась и в среднее не вошла.")
     if cross:
         # без этого пояснения 0.6 читается как «плохо», хотя это норма:
         # человек видит число и не знает, с чем его сравнивать

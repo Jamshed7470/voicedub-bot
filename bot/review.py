@@ -249,7 +249,10 @@ def voice_map_text(proj: Project, report: dict | None = None,
     if len(speakers) > 15:
         lines.append(f"…и ещё {len(speakers) - 15} спикеров")
 
-    if overall:
+    if overall != overall:            # nan: измерять было не на чем
+        lines += ["", "<b>Стабильность голосов: не измерена</b> — в ролике "
+                      "нет спикеров с двумя репликами от 3 секунд"]
+    elif overall:
         # норма зависит от того, совпадает ли язык озвучки с языком оригинала:
         # при межъязыковом дубляже 0.6 — это хорошо, а не плохо
         target = 0.75 if proj.lang_src == proj.lang_tgt else 0.60

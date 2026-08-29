@@ -332,7 +332,9 @@ def test_build_report_counts():
     report = qc_mod.build_report(per_speaker)
     assert report["S1"]["passed"] == 9
     assert report["S1"]["mean_pairwise_identity"] == pytest.approx(1.0, abs=1e-3)
-    assert report["S2"]["mean_pairwise_identity"] == 1.0   # одна реплика
+    # у S2 образцов нет — устойчивость не измерена, и это не «идеально»
+    import math
+    assert math.isnan(report["S2"]["mean_pairwise_identity"])
 
 
 # ------------------------------------------------------------------ разбиение
@@ -352,3 +354,33 @@ def test_split_text_handles_single_long_word():
 
 def test_split_text_short_stays_whole():
     assert split_text("Короткая реплика.", 200) == ["Короткая реплика."]
+
+
+def test_stability_reports_no_data_instead_of_perfect():
+    """Меньше двух реплик — сравнивать нечего, и это не «идеально».
+
+    Раньше возвращалась 1.0, и в ночном отчёте два ролика получили
+    идеальную оценку там, где её никто не измерял: у эпизодического
+    персонажа с одной репликой сравнивать не с чем. Ложная уверенность
+    хуже пропуска — по такому отчёту нельзя понять, где смотреть.
+    """
+    import math
+
+    v = _unit(3)
+    assert math.isnan(qc_mod.mean_pairwise_identity([]))
+    assert math.isnan(qc_mod.mean_pairwise_identity([v]))
+    assert qc_mod.mean_pairwise_identity([v, v]) == pytest.approx(1.0)
+
+
+def test_report_marks_unmeasured_speaker():
+    """Спикер с одной репликой попадает в отчёт как неизмеренный."""
+    import math
+
+    report = qc_mod.build_report({
+        "S1": {"voice": "клон", "segments": 1, "passed": 1,
+               "embeddings": [_unit(1)]},
+        "S2": {"voice": "клон", "segments": 9, "passed": 9,
+               "embeddings": [_unit(2), _unit(2), _unit(2)]},
+    })
+    assert math.isnan(report["S1"]["mean_pairwise_identity"])
+    assert not math.isnan(report["S2"]["mean_pairwise_identity"])
